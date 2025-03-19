@@ -2,7 +2,7 @@
 
 This repository contains the implementation code of the paper PathGPT : Leveraging Large Language Models for Personalized Route Generation.
 
-**Abstract**
+# Introduction
 
 The proliferation of GPS-enabled devices has led to the accumulation of a substantial corpus of historical trajectory data. By lever
 aging these data for training machine learning models, researchers have devised novel data-driven methodologies that address the personalized route recommendation (PRR) problem. 
