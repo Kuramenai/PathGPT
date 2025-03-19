@@ -9,8 +9,14 @@ aging these data for training machine learning models, researchers have devised 
 In contrast to conventional algorithms such as Dijkstra’s shortest path algorithm, these novel algorithms possess the capacity to discern and learn patterns within the data,
 thereby facilitating the generation of more personalized paths. However, once these models have been trained, their application is constrained to 
 the generation of routes that align with their training patterns. This limitation renders them less adaptable to novel scenarios and the deployment of
-multiple machine learning models might be necessary to address new possible scenarios, which can be costly as each model must be trained separately. Inspired by recent advances in the field of Large Language
+multiple machine learning models might be necessary to address new possible scenarios, which can be costly as each model must be trained separately. 
+
+![context_generation](https://github.com/user-attachments/assets/e3c94bdb-c2ad-4eb8-b80a-ac830c29dd34)
+
+Inspired by recent advances in the field of Large Language
 Models (LLMs), we leveraged their natural language understanding capabilities to develop a unified model to solve the PRR problem while being seamlessly adaptable to new scenarios without additional training.
 To accomplish this, we combined the extensive knowledge LLMs acquired during training with further access to external hand-crafted context in
 formation, similar to RAG (Retrieved Augmented Generation) systems, to enhance their ability to generate paths according to user-defined re quirements. 
-Extensive experiments on different datasets show a considerable uplift in LLM performance on the PRR problem.
+
+![pathgpt_framework](https://github.com/user-attachments/assets/9160e97f-12ea-4905-b752-2ca7e0ed6519)
+
