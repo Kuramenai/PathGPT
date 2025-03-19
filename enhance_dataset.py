@@ -88,7 +88,7 @@ def load_data_init(fname, less=False, sample=1000):
 	data = relabel_trips(data, forward)
 	return data, forward
 
-def load_data(fname, less=False, number_of_samples=5):
+def load_data(fname, less=True, sampling_facor=20):
 	cprint("\nLoading map matched trajectories", "blue")
 	f = open(fname, "rb")
 	data = pickle.load(f)
@@ -96,7 +96,9 @@ def load_data(fname, less=False, number_of_samples=5):
 
 	random.shuffle(data) 
 
-	if less:	
+	if less:
+		number_of_samples = len(data)//sampling_facor
+		data = random.sample(data, number_of_samples)	
 		data = data[:number_of_samples]
 
 	data = [(idx, condense_edges(t), timestamps) for (idx, t, timestamps) in tqdm(data, dynamic_ncols=True)]
@@ -128,6 +130,7 @@ def get_path_with_road_names(path, map_uv_to_road_names):
 				path_with_road_names.append(formatted_name)
 		start=destination
 		destination += 1
+
 	# remove duplicates (a road(edge) may pass through different intersections(node))
 	path_with_road_names = list(dict.fromkeys(path_with_road_names))
 	return path_with_road_names
@@ -137,9 +140,6 @@ def extract_road_names():
 	# We find the sreeet/road name associated to each edge ID and map the starting and destination node of an edge to its corresponding road name
 	edges_uv_road_names = edges_df[['u', 'v', 'name']].to_numpy()
 	road_names = {(u,v): re.sub(r"[\[\]]", "", name) if name is not None else None for (u,v,name) in edges_uv_road_names}
-	# f = open(f"backup/new_{place_name}_map_uv_to_road_names", 'rb')
-	# road_names = pickle.load(f)
-	# f.close()
 	cprint('Roads names extracted successfully!', 'green')
 	return road_names
 
@@ -199,9 +199,9 @@ def augment_data(graph, data, road_names):
 			path_collection['original_path'] = original_path 
 			path_collection['fastest_path'] = fastest_path
 			path_collection['shortest_path'] = shortest_path
-			path_collection['original_path_with_road_names'] = original_path_with_road_names
-			path_collection['fastest_path_with_road_names'] =  fastest_path_with_road_names
-			path_collection['shortest_path_with_road_names'] = shortest_path_with_road_names
+			path_collection['original_path_road_names'] = original_path_with_road_names
+			path_collection['fastest_path_road_names'] =  fastest_path_with_road_names
+			path_collection['shortest_path_road_names'] = shortest_path_with_road_names
 			dataset.append(path_collection)
 
 	cprint('Data augmentation done!', 'green')
@@ -223,7 +223,7 @@ def augment_test_data(graph, data, road_names):
 		else:
 			path_collection = {}
 			path_collection['original_path'] = original_path 
-			path_collection['original_path_with_road_names'] = original_path_with_road_names
+			path_collection['original_path_road_names'] = original_path_with_road_names
 			dataset.append(path_collection)
 
 	print(len(dataset))
@@ -255,7 +255,7 @@ if __name__ == "__main__" :
 				graph=graph,
 				data = data,
 				road_names=road_names)
-	file_path = dataset_usage
+	file_path = f'{dataset_usage}_data'
 	save_file(file_path, file=augmented_data)
 
 

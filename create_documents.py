@@ -26,14 +26,10 @@ cprint('Generating documents...', 'light_yellow')
 
 if args.save_as == 'one_path_one_doc':
 
-    pdf_file_path = f'dataset/{place_name}/'
-
-    make_dir(pdf_file_path)
-
-    for i, path_info in enumerate(tqdm(dataset[:5], dynamic_ncols=True)):
-        pass
+    cprint("Unsupported right now, please use the 'save_as' argument with 'all_paths_one_doc'.", 'red')
        
-			
+
+# Save all the textual representations of each path in one big document
 elif args.save_as == 'all_paths_one_doc':
 
     document_path = f'markdown_docs/'
@@ -72,10 +68,6 @@ elif args.save_as == 'all_paths_one_doc':
             starting_address = original_path_with_road_names[0]
             destination_address = original_path_with_road_names[-1]
 
-            # text = f"### 从{starting_address}到{destination_address}可以走一下三个路线:\n\
-            # * 最**快**的路线，它经过的路为: {', '.join(fastest_path_with_road_names)}\n\
-            # * 最**短**的路线，它经过的路为: {', '.join(shortest_path_with_road_names)}\n\
-            # * 最**常用**的路线，它经过的路为: {', '.join(original_path_with_road_names)}\n\n"
 
             task_description = 'Given the following user query, retrieve relevant passages that answer or provide information to help answer it'
 
@@ -87,10 +79,15 @@ elif args.save_as == 'all_paths_one_doc':
             retriever_query2 = f'Instruct: {task_description}\nQuery: {question2}'
             retriever_query3 = f'Instruct: {task_description}\nQuery: {question3}'
 
-            context = f"### Below are three paths that start from {starting_address} to reach {destination_address}:\n\
+            context1 = f"### Below are three paths that start from {starting_address} to reach {destination_address}:\n\
             * The fastest path which crosses: {','.join(fastest_path_with_road_names)}\n\
             * Then the shortest path that crosses: {','.join(shortest_path_with_road_names)}\n\
             * And the last but not least is the most used path that crosses: {','.join(original_path_with_road_names)}\n\n"
+
+            context = f"### 从{starting_address}到{destination_address}可以走一下三个路线:\n\
+            * 最**快**的路线，它经过的路为: {', '.join(fastest_path_with_road_names)}\n\
+            * 最**短**的路线，它经过的路为: {', '.join(shortest_path_with_road_names)}\n\
+            * 最**常用**的路线，它经过的路为: {', '.join(original_path_with_road_names)}\n\n"
 
             answer1 = ','.join(fastest_path_with_road_names)
             answer2 = ','.join(shortest_path_with_road_names)

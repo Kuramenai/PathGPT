@@ -17,16 +17,16 @@ def make_dir(path):
 
 def get_args():
     parser = ArgumentParser()
-    parser.add_argument('-place_name', default='porto', type=str)
+    parser.add_argument('-place_name', default='beijing', type=str)
     parser.add_argument('-dataset_usage', default='test', type=str)
     parser.add_argument('-save_as', default='all_paths_one_doc', type=str)
-    parser.add_argument('-path_type', default='shortest', type=str)
+    parser.add_argument('-path_type', default='fastest', type=str)
     parser.add_argument('-use-context', default=True, action='store_true')
-    parser.add_argument('-llm', default='qwen2.5:14b-instruct', type=str)
-    parser.add_argument('-embedding_model', default='intfloat/multilingual-e5-large-instruct', type=str)
+    parser.add_argument('-llm', default='qwen2.5-14b-instruct', type=str)
+    parser.add_argument('-embedding_model', default='Alibaba-NLP/gte-Qwen2-1.5B-instruct', type=str)
     parser.add_argument('-retrieval_docs_no', default= 3, type=int)
     parser.add_argument("-reset", action="store_true", help="Reset the database.")
     args = parser.parse_args()
     return args
 
- #tencentBAC/conan-embedding-v1 Alibaba-NLP/gte-Qwen2-1.5B-instruct Alibaba-NLP/gte-multilingual-base
+ #tencentBAC/conan-embedding-v1  Alibaba-NLP/gte-multilingual-base intfloat/multilingual-e5-large-instruct

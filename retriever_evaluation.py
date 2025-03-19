@@ -25,15 +25,9 @@ dataset_without_answers = dataset_without_answers.add_column("id", range(len(dat
 
 dataset_without_answers = dataset_without_answers.train_test_split(test_size = 0.1)
 
-# dataset_without_answers["train"].to_json("/train_dataset.json", orient="records")
-
 cprint("\nLoading embeddings...", 'light_yellow')
-# model = HuggingFaceEmbeddings(
-#         model_name=embedding_model,
-#         model_kwargs=model_kwargs,
-#         encode_kwargs=encode_kwargs,
-#         show_progress = False)
-model_id = "intfloat/multilingual-e5-large-instruct"
+
+model_id = 'Alibaba-NLP/gte-Qwen2-1.5B-instruct'
 device = 'cuda' if torch.cuda.is_available() else 'cpu'
 model = SentenceTransformer(
         model_id, 

@@ -35,20 +35,20 @@ def generate_query(path_collection):
         destination_address = ground_truth_path[-1]
 
         if path_type == 'fastest' :
-            # retriever_query =  f"请生成一条从{starting_address}到{destination_address}的路线，要求该路线是最快的。"
-            # llm_query =  retriever_query + "你的回答中只能包含你推荐的路线所经过的路的名字，不要说别的，并用逗号分开路名。"
-            retriever_query =  f"generate the fastest path from {starting_address} to {destination_address}."
-            llm_query =  retriever_query + "Your answer should ONLY include the names of the roads traversed by this path and the names must be separated by a comma."
+            retriever_query1 =  f"generate the fastest path from {starting_address} to {destination_address}."
+            llm_query1 =  retriever_query + "Your answer should ONLY include the names of the roads traversed by this path and the names must be separated by a comma."
+            retriever_query =  f"请生成一条从{starting_address}到{destination_address}的路线，要求该路线是最快的。"
+            llm_query =  retriever_query + "你的回答中只能包含你推荐的路线所经过的路的名字，不要说别的，并用逗号分开路名。"
         elif path_type == 'shortest' :
-            # retriever_query =  f"请生成一条从{starting_address}到{destination_address}的路线，要求该路线是最短的。"
-            # llm_query =  retriever_query + "你的回答中只能包含你推荐的路线所经过的路的名字，不要说别的，并用逗号分开路名。"
-            retriever_query =  f"generate the shortest path from {starting_address} to {destination_address}."
-            llm_query =  retriever_query + "your answer should ONLY include the names of the roads traversed by this path and the names must be separated by a comma."
+            retriever_query1 =  f"generate the shortest path from {starting_address} to {destination_address}."
+            llm_query1 =  retriever_query + "your answer should ONLY include the names of the roads traversed by this path and the names must be separated by a comma."
+            retriever_query =  f"请生成一条从{starting_address}到{destination_address}的路线，要求该路线是最短的。"
+            llm_query =  retriever_query + "你的回答中只能包含你推荐的路线所经过的路的名字，不要说别的，并用逗号分开路名。"
         elif path_type == 'most_used':
-            # retriever_query =  f"请生成一条从{starting_address}到{destination_address}的路线，要求该路线是最常用的。"
-            # llm_query =  retriever_query + "你的回答中只能包含你推荐的路线所经过的路的名字，不要说别的，并用逗号分开路名."
-            retriever_query =  f"generate the most commonly used path from {starting_address} to {destination_address}."
-            llm_query =  retriever_query + "Your answer should ONLY include the names of the roads traversed by this path and the names must be separated by a comma."
+            retriever_query1 =  f"generate the most commonly used path from {starting_address} to {destination_address}."
+            llm_query1 =  retriever_query + "Your answer should ONLY include the names of the roads traversed by this path and the names must be separated by a comma."
+            retriever_query =  f"请生成一条从{starting_address}到{destination_address}的路线，要求该路线是最常用的。"
+            llm_query =  retriever_query + "你的回答中只能包含你推荐的路线所经过的路的名字，不要说别的，并用逗号分开路名."
 
 
         task_description = 'Given a user query, retrieve relevant passages that answer or provide information to help answer the query'
@@ -59,8 +59,6 @@ def generate_query(path_collection):
 def retrieve_context(
     query, 
     number_of_docs_to_retrieve = number_of_docs_to_retrieve):
-
-    # vectordb = Chroma(persist_directory=chroma_path)
 
     retrieved_documents = vectordb.similarity_search_with_score(
                                     query= query, 
@@ -73,24 +71,24 @@ def get_prompt(path_collection, use_context):
     retriever_query, llm_query =  generate_query(path_collection)
 
     if use_context:
-        # PROMPT_TEMPLATE = """
-        # 假设你是一个导航软件，下面是用户曾经走过的历史路线:
-        # {context}
-
-        # ---
-        # 结合以上信息和你本身对{city_name}路网的了解，{question}
-        # """
-        PROMPT_TEMPLATE = """
+        PROMPT_TEMPLATE1 = """
         Suppose you are a navigation app like google maps and you have been given the following historical paths:
         {context}
 
         ---
         use that and your knowledge about the road network of {city_name} to {question}
         """
+        PROMPT_TEMPLATE = """
+        假设你是一个导航软件，下面是用户曾经走过的历史路线:
+        {context}
+
+        ---
+        结合以上信息和你本身对{city_name}路网的了解，{question}
+        """
         query_context = retrieve_context(retriever_query)
     else:
-        # query_context = f'假设你是一个导航软件，根据你对{city_name}路网的了解，'
-        query_context = f'Suppose you are a navigation app like google maps,'
+        query_context1 = f'Suppose you are a navigation app like google maps,'
+        query_context = f'假设你是一个导航软件，根据你对{city_name}路网的了解，'
         PROMPT_TEMPLATE = """{context} {question}"""
 
     prompt_template = ChatPromptTemplate.from_template(PROMPT_TEMPLATE)
@@ -116,25 +114,19 @@ def generate_paths(prompts):
 
     cprint(f"\nGenerating paths for {place_name}...", 'light_cyan')
 
-    batch_size = 16
-
     timeout_duration = 10
     signal.signal(signal.SIGALRM, timeout_handler)
 
     llm_generated_paths = []
 
     for path_index, prompt in enumerate(tqdm(prompts, dynamic_ncols=True)):
-    # for batch_index, i in enumerate(tqdm(range(0, len(prompts), batch_size))):
-    #     batch = prompts[i : i + batch_size]
         signal.alarm(timeout_duration)
         try:
 
             response_text = model.invoke(prompt)
             generated_path = response_text.split(',')
             llm_generated_paths.append(generated_path)
-            # results = model.generate(batch)
-            # for i in range(len(results.flatten())):
-            #     llm_generated_paths.append(results.generations[i][0].text)
+
         except TimeoutException:
             print(f"Skipped: path {path_index} due to timeout")
             llm_generated_paths.append(['N/A'])
@@ -175,12 +167,7 @@ if __name__ == "__main__" :
     vectordb = Chroma(embedding_function=embeddings,persist_directory=chroma_path)
     cprint("Loading embeddings complete!", 'light_green')
 
-    model = OllamaLLM(model=llm)
-    # model = OllamaLLM(
-    #     model=llm,
-    #     temperature=0.1,
-    #     top_p=0.6)
-
+    model = OllamaLLM(model='qwen2.5:14b-instruct')
  
     prompts_path = f'prompts/{place_name}/'
     make_dir(prompts_path)

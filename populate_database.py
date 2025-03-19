@@ -83,30 +83,6 @@ def add_to_chroma(chunks: list[Document]):
         db.add_documents(batch)
     cprint(f"New documents added to {chroma_path}.", "green")
             
-    # Calculate Page IDs.
-    # chunks_with_ids = calculate_chunk_ids(chunks)
-
-    # Add or Update the documents.
-    # existing_items = db.get(include=[])  # IDs are always included by default
-    # existing_ids = set(existing_items["ids"])
-    # print(f"Number of existing documents in DB: {len(existing_ids)}")
-
-    # Only add documents that don't exist in the DB.
-    # new_chunks = []
-    # for chunk in chunks_with_ids:
-    #     if chunk.metadata["id"] not in existing_ids:
-    #         new_chunks.append(chunk)
-
-    # if len(new_chunks):
-    #     print(f"👉 Adding new documents: {len(new_chunks)}")
-    #     new_chunk_ids = [chunk.metadata["id"] for chunk in new_chunks]
-    #     for i in tqdm(range(0, len(new_chunks), MAX_BATCH_SIZE)):
-    #         batch = chunks[i:i + MAX_BATCH_SIZE]
-    #         db.add_documents(batch, ids=new_chunk_ids[i:i + MAX_BATCH_SIZE])
-    #     cprint(f"New documents added to {chroma_path}.", "green")
-    # else:
-    #     print("✅ No new documents to add")
-
 
 def calculate_chunk_ids(chunks):
 
