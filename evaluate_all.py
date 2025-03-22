@@ -10,15 +10,14 @@ from utils import get_args, make_dir
 from variables import *
 
 
-cprint(f'Overalll performance of PathGPT with:', 'light_yellow', attrs=['bold'])
+cprint(f'\nOverall performance of PathGPT with:', 'light_yellow', attrs=['bold'])
 cprint(f'-llm : {llm}', 'green')
-cprint(f'-path type : {path_type}', 'green')
 cprint(f'-embedding model : {embedding_model_formatted_name}', 'green')
-cprint(f'-use conext : {use_context}', 'green')
-cprint(f'-no. retrieved documents : {number_of_docs_to_retrieve}', 'green')
+cprint(f'-no. retrieved documents : {number_of_docs_to_retrieve}\n', 'green')
 
 curr_dir = os.getcwd()
 cities = ['beijing', 'chengdu', 'harbin']
+path_types = ['fastest', 'shortest']
 
 def load_generated_paths(city, path_type, use_context=True):
 
@@ -31,7 +30,7 @@ def load_generated_paths(city, path_type, use_context=True):
     f.close()
     return generated_paths
 
-def load_test_datasets(city):
+def load_test_data(city):
 
     test_data = f'test_data/{city}_data'
 
@@ -45,9 +44,9 @@ def get_precision_recall(generated_paths, test_data, path_type):
     recall, precision = 0, 0
     weighted_factor = 1/len(test_data)
 
-    for path, path_collection in tqdm(zip(generated_paths, test_data), dynamic_ncols = True):
+    for path, path_collection in zip(generated_paths, test_data):
 
-        ground_truth_path = path_collection['fastest_path_road_names']
+        ground_truth_path = path_collection[f'{path_type}_path_road_names']
 
         similarities = 0
         path = list(dict.fromkeys(path))
@@ -59,55 +58,42 @@ def get_precision_recall(generated_paths, test_data, path_type):
         recall += local_recall * weighted_factor
         precision += local_precision * weighted_factor
 
+    precision = round(precision*100, 2)
+    recall = round(recall*100, 2)
+
+    return precision, recall
 
 
+def table_header():
+    metrics = ['', '', '   Precision  ', '   Recall  ']
+    models =  ['path_type', 'city','LLM    |  pathGPT','LLM    |  pathGPT']
+    row_format = "{:25}" * (len(metrics) + 1)
+    row_format2 = "{:25}" * (len(models) + 1)
+    print("-"*117)
+    print(row_format.format("", *metrics))
+    print("-"*117)
+    print(row_format2.format("", *models))
+    print("-"*117)
 
 
+for path_type in path_types:
+    table_header()
 
 
-all_generated_paths_with_context = []
-all_generated_paths_without_context = []
-all_test_data = []
+    for city in cities:
 
-for city in cities:
+        test_data = load_test_data(city)
 
-    generated_paths_with_context = load_generated_paths(city)
-    generated_paths_without_context = load_generated_paths(city, use_context=False)
-    test_data = load_test_datasets(city)
+        fastest_paths_generated_with_context = load_generated_paths(city, path_type)
+        fastest_paths_generated_no_context = load_generated_paths(city, path_type, use_context=False)
 
-    all_generated_paths_with_context.append(generated_paths_with_context)
-    all_test_data.append(all_test_data)
-    all_generated_paths_without_context.append(all_generated_paths_without_context)
+        precision_with_context, recall_with_context = get_precision_recall(fastest_paths_generated_with_context, test_data, path_type)
+        precision_no_context, recall_no_context = get_precision_recall(fastest_paths_generated_no_context, test_data, path_type)
 
-for generated_paths_with_context, generated_paths_without_context, test_data in \
-    zip(all_generated_paths_with_context, all_generated_paths_without_context, all_test_data):
-    recall, precision = 0, 0
-    weighted_factor = 1/len(test_data)
-    diversity_recall, diversity_precision = 0, 0
-    for path, path_collection in tqdm(zip(generated_paths_with_context, test_data), dynamic_ncols = True):
+        results = [precision_no_context, precision_with_context, recall_no_context, recall_with_context]
 
-        if path_type == 'fastest':
-            ground_truth_path = path_collection['fastest_path_road_names']
-        elif path_type == 'shortest':
-            ground_truth_path = path_collection['shortest_path_road_names']
+        res1 = [path_type, f'{city}', f'{results[0]}  |  {results[1]}', f'{results[2]}  |  {results[3]}']
+        row_format3 = "{:25}" * (len(res1) + 1)
+        print(row_format3.format("", *res1))
 
-
-
-    results = [precision, recall]
-        
-        # diversity = 0
-        # for road in path:
-        #     if road in original_path:
-        #         diversity += 1
-        # local_diversity_recall =  diversity/ len(path)
-        # local_diversity_precision =  diversity/len(original_path)
-        # diversity_recall +=  local_diversity_recall * weighted_factor
-        # diversity_precision += local_diversity_precision * weighted_factor
-        # results = []
-
-    
-
-
-
-
-
+    print("\n\n")
