@@ -83,9 +83,40 @@ bash run_script.sh beijing fastest use-context
 The above example generates the fastest path from the beijing dataset using retreived contexts.
 
 ## Evaluation
-For a simple evaluation, run
+For a simple evaluation on a specific dataset run
 ```bash
 python evaluate.py -place_name beijing -path_type fastest -use-context
+```
+To get the evaluation results on the three used datasets, run 
+```bash
+python evaluate_all.py
+```
+which outputs the following information
+```console
+Overall performance of PathGPT with:
+-llm : qwen2.5-14b-instruct
+-embedding model : gte-Qwen2-1.5B-instruct
+-no. retrieved documents : 3
+
+---------------------------------------------------------------------------------------------------------------------
+                                                                              Precision                Recall
+---------------------------------------------------------------------------------------------------------------------
+                         path_type                city                     LLM    |  pathGPT        LLM    |  pathGPT
+---------------------------------------------------------------------------------------------------------------------
+                         fastest                  beijing                  37.11  |  52.29          26.44  |  51.3
+                         fastest                  chengdu                  30.61  |  57.07          22.77  |  53.9
+                         fastest                  harbin                   33.27  |  48.41          20.48  |  37.42
+
+
+
+---------------------------------------------------------------------------------------------------------------------
+                                                                              Precision                Recall
+---------------------------------------------------------------------------------------------------------------------
+                         path_type                city                     LLM    |  pathGPT        LLM    |  pathGPT
+---------------------------------------------------------------------------------------------------------------------
+                         shortest                 beijing                  34.47  |  46.4           26.15  |  48.86
+                         shortest                 chengdu                  27.81  |  48.74          22.56  |  50.33
+                         shortest                 harbin                   29.38  |  41.45          20.74  |  37.89
 ```
 
 
