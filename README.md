@@ -39,6 +39,27 @@ We use the 14b instruct version of qwen2.5 as LLM during our experiments, you ca
   sudo systemctl enable ollama
   sudo systemctl start ollama
   ```
+## Data - Credits to [NeuroMLR](https://github.com/idea-iitd/NeuroMLR)
+Following instructions listed from [NeuroMLR](https://github.com/idea-iitd/NeuroMLR), 
+download the [preprocessed data](https://drive.google.com/file/d/1bICE26ndR2C29jkfG2qQqVkmpirK25Eu/view?usp=sharing) and unzip the downloaded .zip file in the same directory as the other files.
+
+Set the PREFIX_PATH variable in `varibales.py` through the `place_name` variable.
+
+For each city (Beijing, Chengdu, Harbin), there are two types of data:
+
+#### 1. Mapmatched pickled trajectories
+
+Stored as a python pickled list of tuples, where each tuple is of the form (trip_id, trip, time_info). Here each trip is a list of edge identifiers.
+
+
+#### 2. OSM map data
+	
+In the map folder, there are the following files-
+
+1. `nodes.shp` : Contains OSM node information (global node id mapped to (latitude, longitude)) 
+2. `edges.shp` : Contains network connectivity information (global edge id mapped to corresponding node ids)
+3. `graph_with_haversine.pkl` : Pickled NetworkX graph corresponding to the OSM data
+   
 ## Install dependencies
 The dependencies can be installed by running:
 ```bash
