@@ -30,7 +30,7 @@ file_path = f'generated_paths/{place_name}/{llm}/{embedding_model_formatted_name
 file_name = f'use_context_{use_context}_k_{number_of_docs_to_retrieve}'
 
 def generate_query(path_collection):
-        ground_truth_path = path_collection['original_path_with_road_names']
+        ground_truth_path = path_collection['original_path_road_names']
         starting_address = ground_truth_path[0]
         destination_address = ground_truth_path[-1]
 
@@ -153,7 +153,7 @@ def generate_paths(prompts):
 if __name__ == "__main__" :
     
 
-    f = open(f'test/{place_name}_data', 'rb')
+    f = open(f'test_data/{place_name}_data', 'rb')
     test_data = pickle.load(f)
     f.close()
     
