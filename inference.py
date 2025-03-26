@@ -36,17 +36,17 @@ def generate_query(path_collection):
 
         if path_type == 'fastest' :
             retriever_query1 =  f"generate the fastest path from {starting_address} to {destination_address}."
-            llm_query1 =  retriever_query + "Your answer should ONLY include the names of the roads traversed by this path and the names must be separated by a comma."
+            llm_query1 =  retriever_query1 + "Your answer should ONLY include the names of the roads traversed by this path and the names must be separated by a comma."
             retriever_query =  f"请生成一条从{starting_address}到{destination_address}的路线，要求该路线是最快的。"
             llm_query =  retriever_query + "你的回答中只能包含你推荐的路线所经过的路的名字，不要说别的，并用逗号分开路名。"
         elif path_type == 'shortest' :
             retriever_query1 =  f"generate the shortest path from {starting_address} to {destination_address}."
-            llm_query1 =  retriever_query + "your answer should ONLY include the names of the roads traversed by this path and the names must be separated by a comma."
+            llm_query1 =  retriever_query1 + "your answer should ONLY include the names of the roads traversed by this path and the names must be separated by a comma."
             retriever_query =  f"请生成一条从{starting_address}到{destination_address}的路线，要求该路线是最短的。"
             llm_query =  retriever_query + "你的回答中只能包含你推荐的路线所经过的路的名字，不要说别的，并用逗号分开路名。"
         elif path_type == 'most_used':
             retriever_query1 =  f"generate the most commonly used path from {starting_address} to {destination_address}."
-            llm_query1 =  retriever_query + "Your answer should ONLY include the names of the roads traversed by this path and the names must be separated by a comma."
+            llm_query1 =  retriever_query1 + "Your answer should ONLY include the names of the roads traversed by this path and the names must be separated by a comma."
             retriever_query =  f"请生成一条从{starting_address}到{destination_address}的路线，要求该路线是最常用的。"
             llm_query =  retriever_query + "你的回答中只能包含你推荐的路线所经过的路的名字，不要说别的，并用逗号分开路名."
 
