@@ -12,7 +12,7 @@ cprint(f'-DATASET : {place_name}', 'green')
 cprint(f'-SAVING AS : {save_as}\n', 'green')
 
 
-data = f"train/{place_name}_data"
+data = f"train_data/{place_name}_data"
 
 cprint('Loading data...', 'light_yellow')
 
@@ -61,9 +61,9 @@ elif args.save_as == 'all_paths_one_doc':
         
         for path_info in tqdm(dataset, dynamic_ncols=True):
 
-            original_path_with_road_names = path_info['original_path_with_road_names']
-            shortest_path_with_road_names = path_info['shortest_path_with_road_names']
-            fastest_path_with_road_names = path_info['fastest_path_with_road_names']
+            original_path_with_road_names = path_info['original_path_road_names']
+            shortest_path_with_road_names = path_info['shortest_path_road_names']
+            fastest_path_with_road_names = path_info['fastest_path_road_names']
             
             starting_address = original_path_with_road_names[0]
             destination_address = original_path_with_road_names[-1]
@@ -74,6 +74,10 @@ elif args.save_as == 'all_paths_one_doc':
             question1 = f'Generate the fastest path from {starting_address} to {destination_address}.'
             question2 = f'Generate the shortest path from {starting_address} to {destination_address}.'
             question3 = f'Generate the most commonly used path from {starting_address} to {destination_address}.'
+
+            question1 = f'生成从{starting_address}到{destination_address}的最快的路线.'
+            question2 = f'生成从{starting_address}到{destination_address}的最短的路线.'
+            question3 = f'生成从{starting_address}到{destination_address}的最常用的路线.'
 
             retriever_query1 = f'Instruct: {task_description}\nQuery: {question1}'
             retriever_query2 = f'Instruct: {task_description}\nQuery: {question2}'
@@ -96,7 +100,6 @@ elif args.save_as == 'all_paths_one_doc':
             row1 = [retriever_query1, context, answer1]
             row2 = [retriever_query2, context, answer2]
             row3 = [retriever_query3, context, answer3]
-
 
             writer1.writerow(row1)
             writer2.writerow(row2)
