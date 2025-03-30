@@ -75,7 +75,7 @@ save_results_filename = f'eval_scores_of_{path_type}_path_gen_on_{place_name}_da
 
 make_dir(save_results_path)
 
-with open(save_results_path + save_results_filename, 'w') as f:
+with open(save_results_path + save_results_filename, 'a') as f:
     results = f"\
     *****************************************\n\
     Evaluation results on {place_name} dataset for {path_type} generation using:\n\
@@ -84,6 +84,7 @@ with open(save_results_path + save_results_filename, 'w') as f:
     llm : {llm}\n\
     embedding model : {embedding_model}\n\
     context set to: {use_context} \n\n\
+    using invoke insttead of generate \
     *****************************************\n\
     Precision               : {precision} \n\
     Similarity (precision)  : {diversity_precision}\n\
