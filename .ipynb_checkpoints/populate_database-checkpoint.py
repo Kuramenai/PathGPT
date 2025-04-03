@@ -19,7 +19,7 @@ os.environ["HF_ENDPOINT"] = "https://hf-mirror.com"
 
 MAX_BATCH_SIZE= 41666
 
-document = f"pdf_docs/{place_name}_paths.pdf"
+document = f"markdown_docs/{place_name}_paths.md"
 chroma_path = f"chroma_db/{embedding_model_formatted_name}/{place_name}/"
 
 cprint('\nGENERATING EMBEDDINGS FOR :', 'light_yellow', attrs=['bold'])
@@ -29,7 +29,7 @@ cprint(f'-USING : {embedding_model}\n', 'green')
  
 def load_documents(document):
     cprint("Loading document(s)...", "light_yellow")
-    document_loader = PyPDFLoader(document)
+    document_loader = TextLoader(document)
     cprint("Loading document(s) completed!\n", "green")
     return document_loader.load()
 
@@ -43,8 +43,8 @@ def split_doc_by_md_header(documents: list[Document]):
 
 def split_documents(documents: list[Document]):
     text_splitter = RecursiveCharacterTextSplitter(
-        chunk_size=256,
-        chunk_overlap=32,
+        chunk_size=388,
+        chunk_overlap=16,
         length_function=len,
         is_separator_regex=False,
     )
@@ -77,33 +77,16 @@ def add_to_chroma(chunks: list[Document]):
         persist_directory=chroma_path, embedding_function=embeddings
     )
 
-   # Calculate Page IDs.
-    chunks_with_ids = calculate_chunk_ids(chunks)
-
-    # Add or Update the documents.
-    existing_items = db.get(include=[])  # IDs are always included by default
-    existing_ids = set(existing_items["ids"])
-    print(f"Number of existing documents in DB: {len(existing_ids)}")
-
-    # Only add documents that don't exist in the DB.
-    new_chunks = []
-    for chunk in chunks_with_ids:
-        if chunk.metadata["id"] not in existing_ids:
-            new_chunks.append(chunk)
-
-    if len(new_chunks):
-        print(f"👉 Adding new documents: {len(new_chunks)}")
-        new_chunk_ids = [chunk.metadata["id"] for chunk in new_chunks]
-        for i in tqdm(range(0, len(new_chunks), MAX_BATCH_SIZE)):
-            batch = chunks[i:i + MAX_BATCH_SIZE]
-            db.add_documents(batch, ids=new_chunk_ids[i:i + MAX_BATCH_SIZE])
-        cprint(f"New documents added to {chroma_path}.", "green")
-    else:
-        print("✅ No new documents to add")
+    print(f"👉 Adding new documents: {len(chunks)}")
+    for i in tqdm(range(0, len(chunks), MAX_BATCH_SIZE)):
+        batch = chunks[i:i + MAX_BATCH_SIZE]
+        db.add_documents(batch)
+    cprint(f"New documents added to {chroma_path}.", "green")
             
 
 def calculate_chunk_ids(chunks):
 
+    # This will create IDs like "data/monopoly.pdf:6:2"
     # Page Source : Page Number : Chunk Index
 
     last_page_id = None
@@ -147,6 +130,6 @@ if __name__ == "__main__":
 
     # Create (or update) the data store.
     documents = load_documents(document)
-    chunks = split_documents(documents)
+    chunks = split_doc_by_md_header(documents)
     add_to_chroma(chunks)
 

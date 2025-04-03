@@ -37,17 +37,17 @@ def generate_query(path_collection):
         if path_type == 'fastest' :
             retriever_query1 =  f"What is the fastest path from {starting_address} to {destination_address}?"
             llm_query1 =  retriever_query1 + "Your answer should ONLY include the names of the roads traversed by this path and the names must be separated by a comma."
-            retriever_query =  f"从{starting_address}到{destination_address}的最快的路线是什么?。"
+            retriever_query =  f"从{starting_address}到{destination_address}的最快路线是什么?。"
             llm_query =  retriever_query + "你的回答中只能包含你推荐的路线所经过的路的名字，不要说别的，并用逗号分开路名。"
         elif path_type == 'shortest' :
             retriever_query1 =  f"What is the shortest path from {starting_address} to {destination_address}?"
             llm_query1 =  retriever_query1 + "your answer should ONLY include the names of the roads traversed by this path and the names must be separated by a comma."
-            retriever_query =  f"从{starting_address}到{destination_address}的短的路线是什么?"
+            retriever_query =  f"从{starting_address}到{destination_address}的短路线是什么?"
             llm_query =  retriever_query + "你的回答中只能包含你推荐的路线所经过的路的名字，不要说别的，并用逗号分开路名。"
         elif path_type == 'most_used':
             retriever_query1 =  f"What is the most commonly used path from {starting_address} to {destination_address}?"
             llm_query1 =  retriever_query1 + "Your answer should ONLY include the names of the roads traversed by this path and the names must be separated by a comma."
-            retriever_query =  f"从{starting_address}到{destination_address}的最常用的路线是什么?"
+            retriever_query =  f"从{starting_address}到{destination_address}的最常用路线是什么?"
             llm_query =  retriever_query + "你的回答中只能包含你推荐的路线所经过的路的名字，不要说别的，并用逗号分开路名."
 
 
@@ -162,6 +162,8 @@ if __name__ == "__main__" :
     test_data = pickle.load(f)
     f.close()
     
+    model = OllamaLLM(model='qwen2.5:14b-instruct')
+    
     cprint("\nLoading embeddings...", 'yellow')
     embeddings =  HuggingFaceEmbeddings(
             model_name=embedding_model,
@@ -171,39 +173,12 @@ if __name__ == "__main__" :
 
     vectordb = Chroma(embedding_function=embeddings,persist_directory=chroma_path)
     cprint("Loading embeddings complete!", 'light_green')
-
-    model = OllamaLLM(model='qwen2.5:14b-instruct')
- 
-    prompts_path = f'prompts/{place_name}/'
-    make_dir(prompts_path)
-    if not os.path.isfile(prompts_path + f'{path_type}_paths_generation_prompts'):
-        prompts = generate_prompts(test_data, use_context)
-        with open(prompts_path + f'{path_type}_paths_generation_prompts', 'wb') as f:
-            pickle.dump(prompts, f)
-        print("Prompts saved at %s " % prompts_path + f'{path_type}_paths_generation_prompts')
-    else :
-        print("Folder %s already exists, loading prompts..." % prompts_path)
-        f = open(prompts_path + f'{path_type}_paths_generation_prompts','rb')
-        prompts = pickle.load(f)
-        f.close()
-
+     
+    prompts = generate_prompts(test_data, use_context)
     results = generate_paths(prompts)
-
-    # results = []
-    # for generation in outputs.generations:
-    #    for gen in generation:
-    #         generated_path = gen.text.split(',')
-    #         results.append(generated_path)
-
 
     make_dir(file_path)
     with open(file_path + file_name, 'wb') as f:
         pickle.dump(results, f)
     
     cprint(f"File saved at {file_path}{file_name} ", 'green')
-
-    del model
-       
-
-
-

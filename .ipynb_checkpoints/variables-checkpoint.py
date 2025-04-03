@@ -12,7 +12,6 @@ embedding_model_formatted_name = embedding_model.split('/')[1]
 model_kwargs = {'device': 'cuda'}
 encode_kwargs = {'normalize_embeddings': True }
 number_of_docs_to_retrieve = args.retrieval_docs_no
-evaluation_remarks = args.evaluation_remarks
 
 PREFIX_PATH = f"preprocessed_data/{place_name}_data/"
 PICKLED_GRAPH = PREFIX_PATH + "map/graph_with_haversine.pkl"
@@ -36,3 +35,4 @@ elif place_name == 'harbin':
     city_name = '哈尔滨'
 else:
     city_name = place_name
+

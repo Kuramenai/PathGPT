@@ -26,7 +26,6 @@ def get_args():
     parser.add_argument('-embedding_model', default='Alibaba-NLP/gte-Qwen2-1.5B-instruct', type=str)
     parser.add_argument('-retrieval_docs_no', default= 3, type=int)
     parser.add_argument("-reset", action="store_true", help="Reset the database.")
-    parser.add_argument("-evaluation_remarks", default='', type=str)
     args = parser.parse_args()
     return args
 

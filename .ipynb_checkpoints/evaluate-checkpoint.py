@@ -80,16 +80,16 @@ with open(save_results_path + save_results_filename, 'a') as f:
     *****************************************\n\
     Evaluation results on {place_name} dataset for {path_type} generation using:\n\
     Evaluated at : {file_updated_time}\n\
-    Evaluation remarks : {evaluation_remarks}\n\
     docs_to_retrieve : {number_of_docs_to_retrieve}\n\
     llm : {llm}\n\
     embedding model : {embedding_model}\n\
     context set to: {use_context} \n\n\
+    using invoke insttead of generate \
     *****************************************\n\
     Precision               : {precision} \n\
     Similarity (precision)  : {diversity_precision}\n\
     Recall                  : {recall}    \n\
-    Similarity (recall)     : {diversity_recall}\n\n\n"
+    Similarity (recall)     : {diversity_recall}\n"
     f.write(results)
     f.close()
 
