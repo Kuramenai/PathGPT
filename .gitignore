@@ -1,0 +1,13 @@
+__pycache__/
+__pycache__/
+.ipynb_checkpoints/
+chroma_db/
+csv_dataset/
+evaluation_scores/
+generated_paths/beijing/qwen2.5-14b-instruct/gte-Qwen2-1.5B-instruct/fastest/use_context_False_k_3
+generated_paths/beijing/qwen2.5-14b-instruct/gte-Qwen2-1.5B-instruct/fastest/use_context_True_k_3
+generated_paths/beijing/qwen2.5-14b-instruct/multilingual-e5-large-instruct/
+markdown_docs/
+pdf_docs/
+prompts/
+text_docs/
