@@ -4,6 +4,7 @@ import signal
 import pickle
 import gc
 from torch.cuda import empty_cache
+from torch.distributed import destroy_process_group
 from tqdm import tqdm
 from langchain_chroma import Chroma
 from langchain_huggingface import HuggingFaceEmbeddings
@@ -11,11 +12,13 @@ from langchain_ollama import OllamaLLM
 from langchain.prompts import ChatPromptTemplate
 from termcolor import cprint
 from pathlib import Path
+from transformers import AutoTokenizer
+from vllm import LLM, SamplingParams
 
 from utils import TimeoutException, timeout_handler, make_dir
 from variables import *
 
-os.environ["HF_ENDPOINT"] = "https://hf-mirror.com"
+os.environ["HF_ENDPOINT"]="https://hf-mirror.com"
 
 cprint('\n\nGENERATING PATHS USING :', 'light_yellow', attrs=['bold'])
 cprint(f'-DATASET : {place_name}', 'green')
@@ -35,26 +38,26 @@ def generate_query(path_collection):
         destination_address = ground_truth_path[-1]
 
         if path_type == 'fastest' :
-            retriever_query1 =  f"generate the fastest path from {starting_address} to {destination_address}."
-            llm_query1 =  retriever_query1 + "Your answer should ONLY include the names of the roads traversed by this path and the names must be separated by a comma."
-            retriever_query =  f"请生成一条从{starting_address}到{destination_address}的路线，要求该路线是最快的。"
-            llm_query =  retriever_query + "你的回答中只能包含你推荐的路线所经过的路的名字，不要说别的，并用逗号分开路名。"
+            # retriever_query1 =  f"What is the fastest path from {starting_address} to {destination_address}?"
+            # llm_query1 =  retriever_query1 + "Your answer should ONLY include the names of the roads traversed by this path and the names must be separated by a comma."
+            retriever_query =  f"从{starting_address}到{destination_address}的最快路线是什么?"
+            # llm_query =  retriever_query + "你的回答中只能包含你推荐的路线所经过的路的名字，不要说别的，并用逗号分开路名。"
         elif path_type == 'shortest' :
-            retriever_query1 =  f"generate the shortest path from {starting_address} to {destination_address}."
-            llm_query1 =  retriever_query1 + "your answer should ONLY include the names of the roads traversed by this path and the names must be separated by a comma."
-            retriever_query =  f"请生成一条从{starting_address}到{destination_address}的路线，要求该路线是最短的。"
-            llm_query =  retriever_query + "你的回答中只能包含你推荐的路线所经过的路的名字，不要说别的，并用逗号分开路名。"
+            # retriever_query1 =  f"What is the shortest path from {starting_address} to {destination_address}?"
+            # llm_query1 =  retriever_query1 + "your answer should ONLY include the names of the roads traversed by this path and the names must be separated by a comma."
+            retriever_query =  f"从{starting_address}到{destination_address}的短路线是什么?"
+            # llm_query =  retriever_query + "你的回答中只能包含你推荐的路线所经过的路的名字，不要说别的，并用逗号分开路名。"
         elif path_type == 'most_used':
-            retriever_query1 =  f"generate the most commonly used path from {starting_address} to {destination_address}."
-            llm_query1 =  retriever_query1 + "Your answer should ONLY include the names of the roads traversed by this path and the names must be separated by a comma."
-            retriever_query =  f"请生成一条从{starting_address}到{destination_address}的路线，要求该路线是最常用的。"
-            llm_query =  retriever_query + "你的回答中只能包含你推荐的路线所经过的路的名字，不要说别的，并用逗号分开路名."
+            # retriever_query1 =  f"What is the most commonly used path from {starting_address} to {destination_address}?"
+            # llm_query1 =  retriever_query1 + "Your answer should ONLY include the names of the roads traversed by this path and the names must be separated by a comma."
+            retriever_query =  f"从{starting_address}到{destination_address}的最常用路线是什么?"
+            # llm_query =  retriever_query + "你的回答中只能包含你推荐的路线所经过的路的名字，不要说别的，并用逗号分开路名."
 
 
-        task_description = 'Given a user query, retrieve relevant passages that answer or provide information to help answer the query'
+        # task_description = 'Given a user query, retrieve relevant passages that answer the query'
+        task_description = '给定一个问题，检索所有能帮助回答这个问题的相关段落'
         retriever_query = f'Instruct: {task_description}\nQuery: {retriever_query}'
-
-        return retriever_query, llm_query
+        return retriever_query
 
 def retrieve_context(
     query, 
@@ -68,32 +71,56 @@ def retrieve_context(
 
 def get_prompt(path_collection, use_context):
 
-    retriever_query, llm_query =  generate_query(path_collection)
+    retriever_query =  generate_query(path_collection)
 
     if use_context:
-        PROMPT_TEMPLATE1 = """
-        Suppose you are a navigation app like google maps and you have been given the following historical paths:
-        {context}
+#         PROMPT_TEMPLATE1 = """
+#         Suppose you are a navigation app like google maps and you have been given the following historical paths:
+#         {context}
 
-        ---
-        use that and your knowledge about the road network of {city_name} to {question}
-        """
-        PROMPT_TEMPLATE = """
-        假设你是一个导航软件，下面是用户曾经走过的历史路线:
-        {context}
-
-        ---
-        结合以上信息和你本身对{city_name}路网的了解，{question}
-        """
+#         ---
+#         use that and your knowledge about the road network of {city_name} to {question}
+#         """
+#         PROMPT_TEMPLATE = """你是一个导航软件，下面是用户曾经走过的历史路线:\n
+#         {context}
+#         ---
+#         结合以上信息和你本身对{city_name}路网的了解，{question}
+#         """
         query_context = retrieve_context(retriever_query)
+        llm_query = f'你是一个导航软件，根据你对{city_name}路网的了解以及一下提供的相关历史轨迹的信息，你来回答关于在{city_name}导航的一些问题。\
+        你的回答中只能包含你推荐的路线 所经过的路的名字，不要说别的，并用逗号分开路名.\
+        {query_context}\n\
+        上面是一些相关历史轨迹，现在问{retriever_query}'
+        # prompt = [
+        # {"role": "system", 
+        #  "content": f"你是一个导航软件，根据你对{city_name}路网的了解以及会提供的相关历史轨迹的信息，你来回答关于在{city_name}导航的一些问题。\
+        #  你的回答中只能包含你推荐的路线 所经过的路的名字，不要说别的，并用逗号分开路名."},
+        # {"role": "user", 
+        #  "content": llm_query}]
+        prompt = [
+        {"role": "system",
+         "content": f"You are Qwen, created by Alibaba Cloud. You are a helpful assistant."},
+        {"role": "user", 
+         "content": llm_query}]
     else:
-        query_context1 = f'Suppose you are a navigation app like google maps,'
-        query_context = f'假设你是一个导航软件，根据你对{city_name}路网的了解，'
-        PROMPT_TEMPLATE = """{context} {question}"""
+        # query_context1 = f'Suppose you are a navigation app like google maps,'
+        # query_context = f'你是一个导航软件，根据你对{city_name}路网的了解，'
+        # PROMPT_TEMPLATE = """{context} {question}"""
+        llm_query = retriever_query
+        prompt = [
+        {"role": "system", 
+        "content": f"你是一个导航软件，根据你对{city_name}路网的了解，你来回答关于在{city_name}导航的一些问题。\
+        你的回答中只能包含你推荐的路线 所经过的路的名字，不要说别的，并用逗号分开路名."},
+        {"role": "user", 
+        "content": llm_query}]
 
-    prompt_template = ChatPromptTemplate.from_template(PROMPT_TEMPLATE)
-    prompt = prompt_template.format(context=query_context, question=llm_query, city_name=city_name)
+    # prompt_template = ChatPromptTemplate.from_template(PROMPT_TEMPLATE)
+    # prompt = prompt_template.format(context=query_context, question=llm_query, city_name=city_name)
 
+    prompt = tokenizer.apply_chat_template(
+                    prompt,
+                    tokenize=False,
+                    add_generation_prompt=True)
     return prompt
 
 
@@ -114,30 +141,38 @@ def generate_paths(prompts):
 
     cprint(f"\nGenerating paths for {place_name}...", 'light_cyan')
 
-    timeout_duration = 10
+    batch_size = 20
+
+    timeout_duration = 30*batch_size
     signal.signal(signal.SIGALRM, timeout_handler)
 
     llm_generated_paths = []
 
-    for path_index, prompt in enumerate(tqdm(prompts, dynamic_ncols=True)):
+    sampling_params = SamplingParams(temperature=0.7, top_p=0.8, repetition_penalty=1.05, max_tokens=512)
+
+    for batch_index in tqdm(range(0, len(prompts), batch_size), dynamic_ncols=True):
+        batch = prompts[batch_index:batch_size]
         signal.alarm(timeout_duration)
         try:
-
-            response_text = model.invoke(prompt)
-            generated_path = response_text.split(',')
-            llm_generated_paths.append(generated_path)
-
+            outputs = model.generate(batch, sampling_params)
+            for output in outputs:
+                generated_path = output.outputs[0].text.split(',')
+                llm_generated_paths.append(generated_path)
         except TimeoutException:
-            print(f"Skipped: path {path_index} due to timeout")
-            llm_generated_paths.append(['N/A'])
+            print(f"Skipped: batch {batch_index} due to timeout")
+            for i in range(batch_size):
+                llm_generated_paths.append(['N/A'])
         except Exception as e:
-            print(f"Error processing path {path_index}: {e}")
-            llm_generated_paths.append(['N/A'])
+            print(f"Error processing batch {batch_index}: {e}")
+            for i in range(batch_size):
+                llm_generated_paths.append(['N/A'])
         finally:
             signal.alarm(0)
 
-        if (path_index + 1) % 1000 == 0:
-            cprint(f"{(path_index + 1)} paths generated, saving checkpoint", 'light_yellow')
+        if (batch_index + 1) % 100 == 0:
+            cprint(f"{(batch_index + 1)} paths generated, saving checkpoint", 'light_yellow')
+            print(batch[-1])
+            print(generated_path)
             if not os.path.isdir(file_path):
                 cprint("Directory not found, creating...", 'red')
                 Path(file_path).mkdir(parents=True, exist_ok=True)
@@ -167,29 +202,50 @@ if __name__ == "__main__" :
     vectordb = Chroma(embedding_function=embeddings,persist_directory=chroma_path)
     cprint("Loading embeddings complete!", 'light_green')
 
-    model = OllamaLLM(model='qwen2.5:14b-instruct')
- 
-    prompts_path = f'prompts/{place_name}/'
-    make_dir(prompts_path)
-    if not os.path.isfile(prompts_path + f'{path_type}_paths_generation_prompts'):
-        prompts = generate_prompts(test_data, use_context)
-        with open(prompts_path + f'{path_type}_paths_generation_prompts', 'wb') as f:
-            pickle.dump(prompts, f)
-        print("Prompts saved at %s " % prompts_path + f'{path_type}_paths_generation_prompts')
-    else :
-        print("Folder %s already exists, loading prompts..." % prompts_path)
-        f = open(prompts_path + f'{path_type}_paths_generation_prompts','rb')
-        prompts = pickle.load(f)
-        f.close()
+    tokenizer = AutoTokenizer.from_pretrained("Qwen/Qwen2.5-14B-Instruct-GPTQ-Int8")
 
+    # prompts_path = f'prompts/{place_name}/'
+    # make_dir(prompts_path)
+    # if not os.path.isfile(prompts_path + f'{path_type}_paths_generation_prompts'):
+    #     prompts = generate_prompts(test_data, use_context)
+    #     with open(prompts_path + f'{path_type}_paths_generation_prompts', 'wb') as f:
+    #         pickle.dump(prompts, f)
+    #     print("Prompts saved at %s " % prompts_path + f'{path_type}_paths_generation_prompts')
+    # else :
+    #     print("Folder %s already exists, loading prompts..." % prompts_path)
+    #     f = open(prompts_path + f'{path_type}_paths_generation_prompts','rb')
+    #     prompts = pickle.load(f)
+    #     f.close()
 
-    results = generate_paths(prompts)
+    prompts = generate_prompts(test_data, use_context)
+    model = LLM(model="Qwen/Qwen2.5-14B-Instruct-AWQ", 
+                max_model_len=2048, 
+                gpu_memory_utilization=0.9)
+    sampling_params = SamplingParams(temperature=0.7, top_p=0.8, repetition_penalty=1.05)
+    outputs = model.generate(prompts, sampling_params)
 
+    llm_generated_paths = []
+    for output in outputs:
+        generated_path = output.outputs[0].text.split(',')
+        llm_generated_paths.append(generated_path)
+        
     make_dir(file_path)
     with open(file_path + file_name, 'wb') as f:
-        pickle.dump(results, f)
+        pickle.dump(llm_generated_paths, f)
     
     cprint(f"File saved at {file_path}{file_name} ", 'green')
+
+    destroy_process_group()
+
+
+
+    # results = generate_paths(prompts)
+
+    # make_dir(file_path)
+    # with open(file_path + file_name, 'wb') as f:
+    #     pickle.dump(results, f)
+    
+    # cprint(f"File saved at {file_path}{file_name} ", 'green')
        
 
 

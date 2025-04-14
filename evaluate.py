@@ -18,7 +18,7 @@ cprint(f'-USE CONTEXT : {use_context}', 'green')
 cprint(f'-RETRIEVED DOCUMENTS : {number_of_docs_to_retrieve}', 'green')
 
 generated_data_path = f'generated_paths/{place_name}/{llm}/{embedding_model_formatted_name}/{path_type}'
-generated_data_filename = f'/use_context_{use_context}'
+generated_data_filename = f'/use_context_{use_context}_k_{number_of_docs_to_retrieve}'
 
 curr_dir = os.getcwd()
 file_path = os.path.join(curr_dir, 'generated_paths', f'{place_name}', f'{llm}',\
@@ -75,11 +75,12 @@ save_results_filename = f'eval_scores_of_{path_type}_path_gen_on_{place_name}_da
 
 make_dir(save_results_path)
 
-with open(save_results_path + save_results_filename, 'w') as f:
+with open(save_results_path + save_results_filename, 'a') as f:
     results = f"\
     *****************************************\n\
     Evaluation results on {place_name} dataset for {path_type} generation using:\n\
     Evaluated at : {file_updated_time}\n\
+    Evaluation remarks : {evaluation_remarks}\n\
     docs_to_retrieve : {number_of_docs_to_retrieve}\n\
     llm : {llm}\n\
     embedding model : {embedding_model}\n\
