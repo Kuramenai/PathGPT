@@ -60,8 +60,8 @@ elif args.save_as == 'all_paths_one_doc':
         starting_address = original_path_road_names[0]
         destination_address = original_path_road_names[-1]
 
-        text = f"从{starting_address}到{destination_address}的最常用路线是经过{','.join(original_path_road_names)}这几个路段, \
-        但从{starting_address}到{destination_address}的最短路线是经过{','.join(shortest_path_road_names)}这些路，\
+        text = f"从{starting_address}到{destination_address}的最常走的路线是经过{','.join(original_path_road_names)}这几个路段, \
+        但从{starting_address}到{destination_address}的最短的路线是经过{','.join(shortest_path_road_names)}这些路，\
         另外同样从{starting_address}到{destination_address}的最快路线是经过{','.join(fastest_path_road_names)}这些路。"
         paragraph = Paragraph(text, custom_body_style)
         flowables.append(paragraph)
