@@ -1,6 +1,6 @@
-# PathGPT : Leveraging Large Language Models for Personalized Route Generation
+# PathGPT: Leveraging Large Language Models for Personalized Route Generation
 
-This repository contains the implementation code of the paper PathGPT : Leveraging Large Language Models for Personalized Route Generation.
+This repository contains the implementation code of the paper PathGPT: Leveraging Large Language Models for Personalized Route Generation.
 
 # Introduction
 
@@ -12,36 +12,36 @@ the generation of routes that align with their training patterns. This limitatio
 Inspired by recent advances in the field of Large Language
 Models (LLMs), we leveraged their natural language understanding capabilities to develop a unified model to solve the PRR problem while being seamlessly adaptable to new scenarios without additional training.
 To accomplish this, we combined the extensive knowledge LLMs acquired during training with further access to external hand-crafted context in
-formation, similar to RAG (Retrieved Augmented Generation) systems, to enhance their ability to generate paths according to user-defined re quirements. 
+formation, similar to RAG (Retrieved Augmented Generation) systems, to enhance their ability to generate paths according to user-defined requirements. 
 
 ![pathgpt_framework](https://github.com/user-attachments/assets/9160e97f-12ea-4905-b752-2ca7e0ed6519)
 
 # Environment setup
-For reference, all of our experiments were done on a server machine running Unbuntu 22.04 LTS with a NVIDIA RTX 4090.
+For reference, all of our experiments were done on a server machine running Ubuntu 22.04 LTS with a NVIDIA RTX 4090.
 
 ## Local deployment of qwen2.5:14b-instruct
-We use the 14b instruct version of qwen2.5 as LLM during our experiments, you can deploy it locally through Ollama.
-- First install Ollama on your local machine
-    * If you are on linux run:
+We use the 14b instruct version of qwen2.5 as LLM during our experiments. You can deploy it locally through Ollama.
+- First, install Ollama on your local machine
+    * If you are on Linux, run:
       ```bash
       curl -fsSL https://ollama.com/install.sh | sh
       ```
-    * If you are on windows or mac you can download it through [Ollama](https://ollama.com/download) and follow the official installation instructions
+    * If you are on Windows or macOS, you can download it through [Ollama](https://ollama.com/download) and follow the official installation instructions
 - Then download and deploy qwen2.5:14b-instruct by running:
     ```bash
    ollama run qwen2.5:14b-instruct
     ```
 **N.B.**
-- For optimal performance, we recommend to run the model on GPU
-- The 14b version of qwen2.5 requires at least 10 GB of VRAM, so make sure you have enough VRAM capacity if you are running it on GPU.
-- Sometimes, the Ollama service has to be launched manually, on Unbuntu 22.04 LTS, this can be accomplished by running:
+- For optimal performance, we recommend running the model on a GPU
+- The 14b version of qwen2.5 requires at least 10 GB of VRAM, so make sure you have enough VRAM capacity if you are running it on a GPU.
+- Sometimes, the Ollama service has to be launched manually, on Ubuntu 22.04 LTS. This can be accomplished by running:
   ```bash
   sudo systemctl enable ollama
   sudo systemctl start ollama
   ```
 ## Data - Credits to [NeuroMLR](https://github.com/idea-iitd/NeuroMLR)
-Following instructions listed from [NeuroMLR](https://github.com/idea-iitd/NeuroMLR), 
-download the [preprocessed data](https://drive.google.com/file/d/1bICE26ndR2C29jkfG2qQqVkmpirK25Eu/view?usp=sharing) and unzip the downloaded .zip file in the same directory as the other files.
+Following instructions listed from [NeuroMLR](https://github.com/idea-iitd/NeuroMLR).
+Download the [preprocessed data](https://drive.google.com/file/d/1bICE26ndR2C29jkfG2qQqVkmpirK25Eu/view?usp=sharing) and unzip the downloaded .zip file in the same directory as the other files.
 
 Set the PREFIX_PATH variable in `varibales.py` through the `place_name` variable.
 
@@ -49,38 +49,44 @@ For each city (Beijing, Chengdu, Harbin), there are two types of data:
 
 #### 1. Mapmatched pickled trajectories
 
-Stored as a python pickled list of tuples, where each tuple is of the form (trip_id, trip, time_info). Here each trip is a list of edge identifiers.
+Stored as a Python pickled list of tuples, where each tuple is of the form (trip_id, trip, time_info). Here, each trip is a list of edge identifiers.
 
 
 #### 2. OSM map data
 	
 In the map folder, there are the following files-
 
-1. `nodes.shp` : Contains OSM node information (global node id mapped to (latitude, longitude)) 
-2. `edges.shp` : Contains network connectivity information (global edge id mapped to corresponding node ids)
-3. `graph_with_haversine.pkl` : Pickled NetworkX graph corresponding to the OSM data
+1. `nodes.shp`: Contains OSM node information (global node id mapped to (latitude, longitude)) 
+2. `edges.shp`: Contains network connectivity information (global edge id mapped to corresponding node ids)
+3. `graph_with_haversine.pkl`: Pickled NetworkX graph corresponding to the OSM data
    
 ## Install dependencies
-The dependencies can be installed by running:
+Before installing the dependencies, we recommend first creating a virtual environment. 
+For example, you can use conda (assuming it's already installed on your system) to create and activate a virtual environment called pathgpt by entering the following commands:
+```bash
+conda create -n pathgpt python=3.10
+conda activate pathgpt
+```
+The dependencies can then be installed by running:
 ```bash
 python install -r requirements.txt
 ```
-The recommended python version is 3.10. If you are using CUDA, we recommend CUDA 12.4.
+The recommended Python version is 3.10. If you are using CUDA, we recommend CUDA 12.4.
 
 # Reproducibility
 ## End to End reproduction
-To reproduce the results listed in the paper you can run:
+To reproduce the results listed in the paper, you can run:
 ```bash
 bash run_script.sh city path-type use-context
 ```
-Here the first argument city is the dataset to generate paths for, in our case city can be beijing, chengdu or harbin
-the second dataset is the type of paths to generate fastest or shortest
+Here, the first argument, city, is the dataset to generate paths for. In our case city can be beijing, chengdu or harbin
+The second dataset is the type of paths to generate the fastest or shortest
 and the presence of use-context specifies to use the generated contexts from PathGPT.
 
 ```bash
 bash run_script.sh beijing fastest use-context
 ```
-The above example generates the fastest path from the beijing dataset using retreived contexts.
+The above example generates the fastest path from the Beijing dataset using retrieved contexts.
 
 ## Evaluation
 For a simple evaluation on a specific dataset run
@@ -91,32 +97,78 @@ To get the evaluation results on the three used datasets, run
 ```bash
 python evaluate_all.py
 ```
-which outputs the following information
+which outputs the following information, including the precision and recall scores for the base LLM and PathGPT when the number of retrieved documents is set to 3, 6, and 9, respectively.
 ```console
 Overall performance of PathGPT with:
--llm : qwen2.5-14b-instruct
--embedding model : gte-Qwen2-1.5B-instruct
+-llm : qwen2.5-14b
+-embedding model: multilingual-e5-large-instruct
 -no. retrieved documents : 3
 
+
+
 ---------------------------------------------------------------------------------------------------------------------
-                                                                              Precision                Recall
+                                                                              Precision                Recall                
 ---------------------------------------------------------------------------------------------------------------------
-                         path_type                city                     LLM    |  pathGPT        LLM    |  pathGPT
+                         path_type                city                     LLM    |  PathGPT@3      LLM    |  PathGPT@9      
 ---------------------------------------------------------------------------------------------------------------------
-                         fastest                  beijing                  37.11  |  52.29          26.44  |  51.3
-                         fastest                  chengdu                  30.61  |  57.07          22.77  |  53.9
-                         fastest                  harbin                   33.27  |  48.41          20.48  |  37.42
+                         fastest                  beijing                  56.06  |  87.01          39.5  |  88.71           
+                         fastest                  chengdu                  38.29  |  92.58          33.07  |  95.41          
+                         fastest                  harbin                   45.99  |  86.45          29.72  |  89.08          
 
 
 
 ---------------------------------------------------------------------------------------------------------------------
-                                                                              Precision                Recall
+                                                                              Precision                Recall                
 ---------------------------------------------------------------------------------------------------------------------
-                         path_type                city                     LLM    |  pathGPT        LLM    |  pathGPT
+                         path_type                city                     LLM    |  PathGPT@3      LLM    |  PathGPT@9      
 ---------------------------------------------------------------------------------------------------------------------
-                         shortest                 beijing                  34.47  |  46.4           26.15  |  48.86
-                         shortest                 chengdu                  27.81  |  48.74          22.56  |  50.33
-                         shortest                 harbin                   29.38  |  41.45          20.74  |  37.89
+                         most_used                beijing                  12.67  |  85.62          8.39  |  87.56           
+                         most_used                chengdu                  37.49  |  83.66          32.76  |  86.63          
+                         most_used                harbin                   48.16  |  77.22          30.92  |  84.52          
+
+
+
+---------------------------------------------------------------------------------------------------------------------
+                                                                              Precision                Recall                
+---------------------------------------------------------------------------------------------------------------------
+                         path_type                city                     LLM    |  PathGPT@6      LLM    |  PathGPT@9      
+---------------------------------------------------------------------------------------------------------------------
+                         fastest                  beijing                  56.06  |  87.01          39.5  |  88.71           
+                         fastest                  chengdu                  38.29  |  92.58          33.07  |  95.41          
+                         fastest                  harbin                   45.99  |  86.45          29.72  |  89.08          
+
+
+
+---------------------------------------------------------------------------------------------------------------------
+                                                                              Precision                Recall                
+---------------------------------------------------------------------------------------------------------------------
+                         path_type                city                     LLM    |  PathGPT@6      LLM    |  PathGPT@9      
+---------------------------------------------------------------------------------------------------------------------
+                         most_used                beijing                  12.67  |  85.62          8.39  |  87.56           
+                         most_used                chengdu                  37.49  |  83.66          32.76  |  86.63          
+                         most_used                harbin                   48.16  |  77.22          30.92  |  84.52          
+
+
+
+---------------------------------------------------------------------------------------------------------------------
+                                                                              Precision                Recall                
+---------------------------------------------------------------------------------------------------------------------
+                         path_type                city                     LLM    |  PathGPT@9      LLM    |  PathGPT@9      
+---------------------------------------------------------------------------------------------------------------------
+                         fastest                  beijing                  56.06  |  87.01          39.5  |  88.71           
+                         fastest                  chengdu                  38.29  |  92.58          33.07  |  95.41          
+                         fastest                  harbin                   45.99  |  86.45          29.72  |  89.08          
+
+
+
+---------------------------------------------------------------------------------------------------------------------
+                                                                              Precision                Recall                
+---------------------------------------------------------------------------------------------------------------------
+                         path_type                city                     LLM    |  PathGPT@9      LLM    |  PathGPT@9      
+---------------------------------------------------------------------------------------------------------------------
+                         most_used                beijing                  12.67  |  85.62          8.39  |  87.56           
+                         most_used                chengdu                  37.49  |  83.66          32.76  |  86.63          
+                         most_used                harbin                   48.16  |  77.22          30.92  |  84.52          
 ```
 
 
