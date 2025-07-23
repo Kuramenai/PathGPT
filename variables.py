@@ -1,8 +1,10 @@
+# import sys
 from utils import get_args
 
+# sys.argv = [""]
 args = get_args()
 place_name = args.place_name
-dataset_usage = args.dataset_usage
+# dataset_usage = args.dataset_usage
 path_type = args.path_type
 map_path_type = {"fastest": "最快", "shortest": "最短", "most_used": ""}
 save_as = args.save_as
@@ -12,7 +14,7 @@ embedding_model = args.embedding_model
 embedding_model_formatted_name = embedding_model.split("/")[1]
 model_kwargs = {"device": "cuda"}
 encode_kwargs = {"normalize_embeddings": True}
-number_of_docs_to_retrieve = args.retrieval_docs_no
+number_of_docs_to_retrieve = args.top_k
 evaluation_remarks = args.evaluation_remarks
 
 # fmt: off

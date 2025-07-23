@@ -1,7 +1,7 @@
 import os
-import sys
 import pickle
 import random
+import shutil
 import osmnx as ox
 import geopandas as gpd
 import networkx as nx
@@ -14,18 +14,12 @@ from utils import make_dir
 from typing import List, Dict, Tuple
 from copy import deepcopy
 
-sys.argv = [""]
-
 
 edges_df = gpd.read_file(variables.EDGE_DATA)
 map_edge_id_to_u_v = edges_df[["u", "v"]].to_numpy()
 map_u_v_to_edge_id = {(u, v): i for i, (u, v) in enumerate(map_edge_id_to_u_v)}
-
-valid_names_first_level = [
-    "路",
-    "道",
-    "街",
-]
+edges_uv_road_names = edges_df[["fid", "u", "v", "name"]].to_numpy()
+valid_names_first_level = ["路", "道", "街"]
 
 valid_names_second_level = [
     "路",
@@ -40,11 +34,13 @@ valid_names_second_level = [
     "同",
 ]
 
+not_valid_names = ["仓", "北", "区", "厂", "口", "园", "堤", "头", "庄", "廊", "期"]
+
 
 def welcome_text():
     cprint("\n\nGENERATING DATASET FOR :", "light_yellow", attrs=["bold"])
     cprint(f"-PLACE NAME : {variables.place_name}", "green")
-    cprint(f"-USE FOR : {variables.dataset_usage}", "green")
+    # cprint(f"-USE FOR : {variables.dataset_usage}", "green")
 
 
 def condense_edges(edge_route: List[int]) -> List[int]:
@@ -100,6 +96,47 @@ def edge_id_to_node_id(path: List[int]) -> List[int]:
     ]
 
 
+def load_graph(fname: str) -> any:
+    """
+    Load the graph associated with a road network.
+
+    Args:
+        fname (str): path of the graph file stored  locally.
+
+    Returns:
+        any: graph of the road network
+    """
+
+    cprint("\nLoading graph...", "light_yellow")
+    f = open(variables.PICKLED_GRAPH, "rb")
+    graph = pickle.load(f)
+    # Add edge speeds and travel times as weights to road network graph in order to compute fastest and shortest paths
+    ox.add_edge_speeds(graph)
+    ox.add_edge_travel_times(graph)
+    edges = ox.graph_to_gdfs(graph, nodes=False)[
+        ["highway", "travel_time"]
+    ].reset_index(drop=True)
+    edges_with_missing_travel_values = 0
+    for e in graph.edges(data=True):
+        # Here we divide the length of each edge by 1000 just to maintain consistency with NeuroMLR (although I am not sure why they did that)
+        e[2]["length"] = e[2]["length"] / 1000
+        # The travel times are missing for some edges (equals to 0),
+        # in that case we replace it with the mean value of the travel times of all edges of the same type
+        if e[2]["travel_time"] == 0:
+            edges_with_missing_travel_values += 1
+            e[2]["travel_time"] = (
+                edges.loc[edges["highway"] == e[2]["highway"]]["travel_time"]
+                .mean()
+                .round(1)
+            )
+    f.close()
+    cprint(
+        f"The number of edges with missing travel times found is {edges_with_missing_travel_values}"
+    )
+    cprint("Graph loaded successfully!", "green")
+    return graph
+
+
 def load_data(fname: str, less: bool = False, samples: int = 35_000) -> List[List[int]]:
     """
     Load the training data.
@@ -136,16 +173,18 @@ def load_data(fname: str, less: bool = False, samples: int = 35_000) -> List[Lis
         for (idx, t, timestamps) in tqdm(data, dynamic_ncols=True)
     ]
     # ignoring very small trips
-    data = [t for (idx, t, timestamps) in tqdm(data, dynamic_ncols=True) if len(t) >= 5]
-    # Each data sample is now a sequence of nodes ID, we will use these nodes to compute new paths later
-    data = [edge_id_to_node_id(path) for path in tqdm(data, dynamic_ncols=True)]
+    data = [
+        (idx, t, timestamps)
+        for (idx, t, timestamps) in tqdm(data, dynamic_ncols=True)
+        if len(t) >= 5
+    ]
 
     return data
 
 
 def load_test_data(
     fname: str, less=False, samples=1000
-) -> List[Tuple[int, List[int], int]]:
+) -> List[Tuple[int, List[int], Tuple[int, int]]]:
     """
     Load the training data.
 
@@ -249,7 +288,7 @@ def get_path_with_road_names(
     while start < destination and destination < len(path):
         road_name = map_uv_to_road_names[(path[start], path[destination])]
         if road_name != "N/A":
-            path_with_road_names.append(road_name)
+            path_with_road_names.append(road_name.strip())
         elif road_name == "N/A":
             return []
         else:
@@ -262,6 +301,21 @@ def get_path_with_road_names(
     # remove duplicates (a road(edge) may pass through different intersections(node))
     path_with_road_names = list(dict.fromkeys(path_with_road_names))
     return path_with_road_names
+
+
+def clear_road_names(road_names_path: str) -> None:
+    """
+    Clears the previously extracted road names if found.
+
+    Args:
+        road_names_path (str): path of the locally stored roads names.
+    """
+
+    if os.path.exists(road_names_path):
+        shutil.rmtree(road_names_path)
+        cprint("✅ Roads names cleared", "green")
+    else:
+        cprint(f"No roads names found at {road_names_path}", "yellow")
 
 
 def extract_road_names(road_names_file: str) -> List[str]:
@@ -283,18 +337,15 @@ def extract_road_names(road_names_file: str) -> List[str]:
         road_names = pickle.load(f)
         f.close
     else:
-        edges_uv_road_names = edges_df[["fid", "u", "v", "name"]].to_numpy()
         road_names = {}
-        for fid, u, v, name in tqdm(edges_uv_road_names, dynamic_ncols=True):
+        for _, u, v, name in tqdm(edges_uv_road_names, dynamic_ncols=True):
             if name is not None:
                 if name[-1] in valid_names_first_level:
                     road_names[(u, v)] = name
                 else:
-                    name = get_road_name_from_nominatim(fid)
-                    road_names[(u, v)] = name
+                    road_names[(u, v)] = "N/A"
             else:
-                name = get_road_name_from_nominatim(fid)
-                road_names[(u, v)] = name
+                road_names[(u, v)] = "N/A"
 
         make_dir("road_names")
         with open(road_names_file, "wb") as f:
@@ -302,47 +353,6 @@ def extract_road_names(road_names_file: str) -> List[str]:
 
     cprint("Roads names extracted successfully!", "green")
     return road_names
-
-
-def load_graph(fname: str) -> any:
-    """
-    Load the graph associated with a road network.
-
-    Args:
-        fname (str): path of the graph file stored  locally.
-
-    Returns:
-        any: graph of the road network
-    """
-
-    cprint("\nLoading graph...", "light_yellow")
-    f = open(variables.PICKLED_GRAPH, "rb")
-    graph = pickle.load(f)
-    # Add edge speeds and travel times as weights to road network graph in order to compute fastest and shortest paths
-    ox.add_edge_speeds(graph)
-    ox.add_edge_travel_times(graph)
-    edges = ox.graph_to_gdfs(graph, nodes=False)[
-        ["highway", "travel_time"]
-    ].reset_index(drop=True)
-    edges_with_missing_travel_values = 0
-    for e in graph.edges(data=True):
-        # Here we divide the length of each edge by 1000 just to maintain consistency with NeuroMLR (although I am not sure why they did that)
-        e[2]["length"] = e[2]["length"] / 1000
-        # The travel times are missing for some edges (equals to 0),
-        # in that case we replace it with the mean value of the travel times of all edges of the same type
-        if e[2]["travel_time"] == 0:
-            edges_with_missing_travel_values += 1
-            e[2]["travel_time"] = (
-                edges.loc[edges["highway"] == e[2]["highway"]]["travel_time"]
-                .mean()
-                .round(1)
-            )
-    f.close()
-    cprint(
-        f"The number of edges with missing travel times found is {edges_with_missing_travel_values}"
-    )
-    cprint("Graph loaded successfully!", "green")
-    return graph
 
 
 def compute_paths(path: List[int]) -> Tuple[List[int], List[int], List[int]]:
@@ -364,28 +374,38 @@ def compute_paths(path: List[int]) -> Tuple[List[int], List[int], List[int]]:
 
 
 def augment_data(
-    data: List[List[int]], road_names: Dict[Tuple[int, int], str], n_cores: int = 12
+    data: List[Tuple[int, List[int], Tuple[int, int]]],
+    road_names: Dict[Tuple[int, int], str],
+    n_cores: int = 12,
 ) -> List[Dict[str, List[int]]]:
     """
     Generate new training dataset containing the original paths and the newly computed fastest and shortest paths using the names of the roads traversed instead of the nodes ids.
 
     Args:
-        data (List[List[int]]): A list of historical trajectories where each trajectory is expressed in the format (idx, t, timestamps).
+        data (List[Tuple[int, List[int], int]]): A list of historical trajectories where each trajectory is expressed in the format of the following tuple (idx, t, timestamps).
         road_names (Dict[Tuple[int, int], str]): Dictionary that map a pair of node ids to a road name.
         n_cores (int, optional) : Number of cores to be used for computing the paths.
 
     Returns:
-        List[Dict[str, List[int]]]: List of dictionaries where each dictionary contains the roads names of a historical path plus its fastest and shortest path as well.
+        Tuple[List[Dict[str, List[int]]], List[Tuple[int, List[int], int]]]: Tuple containing a list of dictionaries and a list of tuples.
+        The list of dictionaries is a list where each dictionary contains the roads names of a historical path plus its fastest and shortest path as well.
         These can be retreived by using the keys "most_used", "fastest" and "shortest" respectively.
+        In the list of tuples, each tuple is in the original format of the data i.e (idx, t, timestamps).
     """
     cprint("\nAugmenting train data...", "light_yellow")
-    cprint("Generating new paths...", "light_green")
+    data_copy = deepcopy(data)
+    # Each sample data is now a sequence of nodes ID, we will use these nodes to compute new paths later
+    data = [t for (idx, t, timestamps) in tqdm(data, dynamic_ncols=True)]
+    data = [edge_id_to_node_id(path) for path in tqdm(data, dynamic_ncols=True)]
 
+    cprint("Generating new paths...", "light_green")
     with concurrent.futures.ProcessPoolExecutor(max_workers=n_cores) as executor:
-        data = list(tqdm(executor.map(compute_paths, data), total=len(data)))
+        data = list(
+            tqdm(executor.map(compute_paths, data, chunksize=100), total=len(data))
+        )
 
     cprint("Adding road names...", "light_green")
-    dataset = []
+    neuromlr_train_data, dataset = [], []
     for path_index, (original_path, fastest_path, shortest_path) in tqdm(
         enumerate(data), dynamic_ncols=True
     ):
@@ -400,25 +420,31 @@ def augment_data(
         )
 
         # fmt: off
-        if (len(original_path_with_road_names) * len(fastest_path_with_road_names) * len(shortest_path_with_road_names) == 0):
-            continue
-        else:
+        if len(original_path_with_road_names) >= 3 and len(fastest_path_with_road_names) >=3 and len(shortest_path_with_road_names) >= 3:
             path_collection = {}
             path_collection["original_path_road_names"] = original_path_with_road_names
             path_collection["fastest_path_road_names"] = fastest_path_with_road_names
             path_collection["shortest_path_road_names"] = shortest_path_with_road_names
             dataset.append(path_collection)
+            neuromlr_train_data.append(data_copy[path_index])
+        else:
+            continue
         # fmt: on
 
+    cprint(
+        f"The length of train_data is {len(dataset)}, while the length of neuromlr_train_data is {len(neuromlr_train_data)}",
+        "yellow",
+    )
+
     cprint("Data augmentation done!", "green")
-    return dataset
+    return dataset, neuromlr_train_data
 
 
 def augment_test_data(
-    data: List[Tuple[int, List[int], int]],
+    data: List[Tuple[int, List[int], Tuple[int, int]]],
     road_names: Dict[Tuple[int, int], str],
     n_cores: int = 12,
-) -> Tuple[List[Dict[str, List[int]]], List[Tuple[int, List[int], int]]]:
+) -> Tuple[List[Dict[str, List[int]]], List[Tuple[int, List[int], Tuple[int, int]]]]:
     """
     Generate new testing dataset containing the original paths and the newly computed fastest and shortest paths using the names of the roads traversed instead of the nodes ids.
 
@@ -428,8 +454,8 @@ def augment_test_data(
         n_cores (int, optional): Number of cores to be used for computing the paths. Defaults to 12.
 
     Returns:
-        Tuple[List[Dict[str, List[int]]], List[Tuple[int, List[int], int]]]: Tuple containing a list of dictionaries and list of tuples.
-        The list of dictionaries where each dictionary contains the roads names of a historical path plus its fastest and shortest path as well.
+        Tuple[List[Dict[str, List[int]]], List[Tuple[int, List[int], int]]]: Tuple containing a list of dictionaries and a list of tuples.
+        The list of dictionaries is a list where each dictionary contains the roads names of a historical path plus its fastest and shortest path as well.
         These can be retreived by using the keys "most_used", "fastest" and "shortest" respectively.
         In the list of tuples, each tuple is in the original format of the data i.e (idx, t, timestamps).
     """
@@ -440,8 +466,10 @@ def augment_test_data(
     data = [edge_id_to_node_id(path) for path in tqdm(data, dynamic_ncols=True)]
 
     cprint("Generating new paths...", "light_green")
+    # fmt: off
     with concurrent.futures.ProcessPoolExecutor(max_workers=n_cores) as executor:
-        data = list(tqdm(executor.map(compute_paths, data), total=len(data)))
+        data = list(tqdm(executor.map(compute_paths, data, chunksize=100), total=len(data)))
+    # fmt: off
 
     cprint("Adding road names...", "light_green")
     dataset, neuromlr_test_data = [], []
@@ -458,15 +486,15 @@ def augment_test_data(
             shortest_path, road_names
         )
         # fmt: off
-        if (len(original_path_with_road_names) * len(fastest_path_with_road_names) * len(shortest_path_with_road_names) == 0):
-            continue
-        else:
+        if len(original_path_with_road_names) >= 3 and len(fastest_path_with_road_names) >=3 and len(shortest_path_with_road_names) >= 3:
             path_collection = {}
             path_collection["original_path_road_names"] = original_path_with_road_names
             path_collection["fastest_path_road_names"] = fastest_path_with_road_names
             path_collection["shortest_path_road_names"] = shortest_path_with_road_names
             dataset.append(path_collection)
             neuromlr_test_data.append(data_copy[path_index])
+        else:
+            continue
         # fmt: on
     cprint(
         f"The length of test_data is {len(dataset)}, while the length of neuromlr_test_data is {len(neuromlr_test_data)}",
@@ -474,6 +502,35 @@ def augment_test_data(
     )
     cprint("Data augmentation done!", "green")
     return dataset, neuromlr_test_data
+
+
+def sanity_check(
+    edges_paths: List[Tuple[int, List[int], Tuple[int, int]]],
+    nodes_paths: Dict[str, List[int]],
+) -> int:
+    """
+    Sanity check that the street names of the paths generated from the node ids are the same as the ones extracted from the edges ids.
+
+    Args:
+        edges_paths (List[Tuple[int, List[int], Tuple[int, int]]]): historical trajectories extracted from the original dataset.
+        nodes_paths (Dict[str, List[int]]): new paths computed from the source and destination information provided from the historical trajectories.
+
+    Returns:
+        int: number of dissimilarities if found.
+    """
+
+    dissimilarities = 0
+    for historical_path_info, path_collection in zip(edges_paths, nodes_paths):
+        historical_path = list(
+            dict.fromkeys(
+                [edges_uv_road_names[edge_id][3] for edge_id in historical_path_info[1]]
+            )
+        )
+        generated_path = path_collection["original_path_road_names"]
+        if generated_path != historical_path:
+            dissimilarities += 1
+
+    return dissimilarities
 
 
 def relabel_test_data(dataset, forward):
@@ -508,7 +565,7 @@ def save_file(file_path: str, file: any) -> None:
 if __name__ == "__main__":
     welcome_text()
     train_data = load_data(fname=variables.TRAIN_TRIP_DATA_PICKLED_WITH_TIMESTAMPS)
-    # test_data = load_test_data(fname=TEST_TRIP_SMALL_FIXED_DATA_PICKLED_WITH_TIMESTAMPS)
+    test_data = load_test_data(fname=variables.TEST_TRIP_DATA_PICKLED_WITH_TIMESTAMPS)
 
     graph = load_graph(fname=variables.PICKLED_GRAPH)
     script_dir = os.path.dirname(os.path.abspath(__file__))
@@ -516,13 +573,37 @@ if __name__ == "__main__":
     road_names_file = os.path.join(script_dir, road_names_file)
     road_names = extract_road_names(road_names_file)
 
-    augmented_train_data = augment_data(
-        data=train_data, road_names=road_names, n_cores=4
+    augmented_train_data, neuromlr_train_data = augment_data(
+        data=train_data, road_names=road_names, n_cores=16
     )
     augmented_test_data, neuromlr_test_data = augment_test_data(
-        data=variables.test_data, road_names=road_names
+        data=test_data, road_names=road_names, n_cores=16
     )
+
+    train_dataset_dissimilarities = sanity_check(
+        neuromlr_train_data, augmented_train_data
+    )
+
+    if train_dataset_dissimilarities > 0:
+        cprint(
+            f"Incoherence between paths with roads names extracted from edges ids ans paths with street names extracted from nodes ids.\
+            Found {train_dataset_dissimilarities} dissimilarities in train data."
+            "red",
+        )
+    else:
+        cprint("Sanity check passed for test dataset", "green")
+
+    test_dataset_dissimilarities = sanity_check(neuromlr_test_data, augmented_test_data)
+    if test_dataset_dissimilarities > 0:
+        cprint(
+            f"Incoherence between paths with roads names extracted from edges ids ans paths with street names extracted from nodes ids.\
+            Found {test_dataset_dissimilarities} dissimilarities in test data."
+            "red",
+        )
+    else:
+        cprint("Sanity check passed for train dataset", "green")
 
     save_file("train_data", file=augmented_train_data)
     save_file("test_data", file=augmented_test_data)
     save_file("neuromlr_test_data", file=neuromlr_test_data)
+    save_file("neuromlr_train_data", file=neuromlr_train_data)

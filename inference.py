@@ -3,7 +3,6 @@ import os
 os.environ["HF_ENDPOINT"] = "https://hf-mirror.com"
 os.environ["XLA_PYTHON_CLIENT_PREALLOCATE"] = "false"
 
-import sys
 import signal
 import pickle
 import json
@@ -28,10 +27,6 @@ from utils import TimeoutException, timeout_handler, make_dir
 from nltk.corpus import stopwords
 from typing import List
 
-
-sys.argv = [""]
-
-
 cprint("\n\nGENERATING PATHS USING :", "light_yellow", attrs=["bold"])
 cprint(f"-DATASET : {variables.place_name}", "green")
 cprint(f"-PATH TYPE : {variables.path_type}", "green")
@@ -53,7 +48,10 @@ def generate_query(path_collection: dict[str, list]) -> tuple[str, str]:
         retriever_query : the retriever query,
         llm_query : the LLM query
         """
-    ground_truth_path = path_collection["original_path_road_names"]
+    if variables.path_type == "most_used":
+        ground_truth_path = path_collection["original_path_road_names"]
+    else:
+        ground_truth_path = path_collection[f"{variables.path_type}_path_road_names"]
     starting_address = ground_truth_path[0]
     destination_address = ground_truth_path[-1]
 
@@ -74,7 +72,7 @@ def generate_query(path_collection: dict[str, list]) -> tuple[str, str]:
 
 
 def get_prompt(
-    llm_query: str, retrieved_documents: list[str], use_context: bool = True
+    llm_query: str, retrieved_documents: list[str], use_context: bool
 ) -> ChatPromptTemplate:
     """
     Given a retriever query, a query for the LLM, retrieved documents based on the retriever query, generate a prompt for the LLM.
@@ -233,7 +231,7 @@ if __name__ == "__main__":
         f"chroma_db/{variables.embedding_model_formatted_name}/{variables.place_name}/"  # noqa: F405
     )
 
-    json_file_path = "json_files/beijing_paths.json"
+    json_file_path = f"json_files/{variables.place_name}_paths.json"
     document = json.loads(Path(json_file_path).read_text())
     corpus = [routing["content"] for routing in document]
 
@@ -298,7 +296,7 @@ if __name__ == "__main__":
     ]  # [[str,..., str], ..., [str,..., str]]
 
     cprint("Generating prompts...", "green")
-    top_k = 9
+    top_k = variables.number_of_docs_to_retrieve
     prompts, semantic_search_results = [], []
     for retriever_query, llm_query, bm25_results in tqdm(
         zip(retriever_queries, llm_queries, bm25_top_results_docs),
@@ -308,7 +306,9 @@ if __name__ == "__main__":
         retrieved_docs = retrieve_docs_from_refined_corpus(
             retriever_query, bm25_results, k=top_k
         )
-        prompt = get_prompt(llm_query, retrieved_docs, use_context=True)
+        prompt = get_prompt(
+            llm_query, retrieved_docs, use_context=variables.use_context
+        )
         prompts.append(prompt)
         semantic_search_results.append(retrieved_docs)
 
@@ -329,9 +329,11 @@ if __name__ == "__main__":
     cprint("Inference..", "green")
     model = OllamaLLM(model="qwen2.5:14b-instruct")
     file_path = f"generated_paths/{variables.place_name}/{variables.llm}/{variables.embedding_model_formatted_name}/{variables.path_type}/"
-    file_name = (
-        f"use_context_{variables.use_context}_k_{variables.number_of_docs_to_retrieve}"
-    )
+    if variables.use_context:
+        file_name = f"use_context_{variables.use_context}_k_{variables.number_of_docs_to_retrieve}"
+    else:
+        file_name = f"use_context_{variables.use_context}"
+
     results = generate_paths(prompts)
 
     make_dir(file_path)
