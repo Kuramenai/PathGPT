@@ -8,13 +8,11 @@ import variables
 cprint("Overall performance of PathGPT with:", "light_yellow", attrs=["bold"])
 cprint(f"-llm : {variables.llm}", "green")
 cprint(f"-embedding model : {variables.embedding_model_formatted_name}", "green")
-cprint(
-    f"-no. retrieved documents : {variables.number_of_docs_to_retrieve}\n\n\n", "green"
-)
+
 
 curr_dir = os.getcwd()
 cities = ["beijing", "chengdu", "harbin"]
-path_types = ["touristic"]
+path_types = ["touristic", "highway_free"]
 
 
 def load_generated_paths(city, path_type, top_k, use_context=True):
@@ -36,10 +34,8 @@ def load_generated_paths(city, path_type, top_k, use_context=True):
             new_test_data.append(path_collection)
             if len(generated_path) == 1:
                 bad_generated_paths += 1
-                # cprint(generated_path, "red")
                 path = generated_path[0]
                 generated_path = path.split("，")
-                # cprint(generated_path, "green")
             new_generated_data.append(generated_path)
 
     return new_generated_data, new_test_data
@@ -64,9 +60,9 @@ def get_precision_recall(generated_data, test_data, path_type):
             ground_truth_path = path_collection["shortest_path_road_names"]
         elif path_type == "most_used":
             ground_truth_path = path_collection["original_path_road_names"]
-        elif variables.path_type == "highway_free":
+        elif path_type == "highway_free":
             ground_truth_path = path_collection["highway_free_path_road_names"]
-        elif variables.path_type == "touristic":
+        elif path_type == "touristic":
             ground_truth_path = path_collection["touristic_path_road_names"]
 
         # original_path = path_collection[f"{variables.path_type}_path_road_names"]
@@ -109,18 +105,18 @@ for top_k in range(3, 12, 3):
         table_header(top_k)
 
         for city in cities:
-            paths_generated_with_context, test_data = load_generated_paths(
+            paths_generated_with_context, test_data_1 = load_generated_paths(
                 city, path_type, top_k
             )
-            paths_generated_no_context, test_data = load_generated_paths(
+            paths_generated_no_context, test_data_2 = load_generated_paths(
                 city, path_type, top_k, use_context=False
             )
 
             precision_with_context, recall_with_context = get_precision_recall(
-                paths_generated_with_context, test_data, path_type
+                paths_generated_with_context, test_data_1, path_type
             )
             precision_no_context, recall_no_context = get_precision_recall(
-                paths_generated_no_context, test_data, path_type
+                paths_generated_no_context, test_data_2, path_type
             )
 
             results = [
