@@ -48,7 +48,7 @@ f = open(generated_data_path + generated_data_filename, "rb")
 generated_data = pickle.load(f)
 f.close()
 
-test_data_path = "test_data/"
+test_data_path = f"test_data/{variables.path_type}_paths/"
 test_data_filename = f"{place_name}_data"
 
 f = open(test_data_path + test_data_filename, "rb")
@@ -92,6 +92,10 @@ for path, path_collection in tqdm(zip(generated_data, test_data), dynamic_ncols=
         ground_truth_path = path_collection["shortest_path_road_names"]
     elif variables.path_type == "most_used":
         ground_truth_path = path_collection["original_path_road_names"]
+    elif variables.path_type == "highway_free":
+        ground_truth_path = path_collection["highway_free_path_road_names"]
+    elif variables.path_type == "touristic":
+        ground_truth_path = path_collection["touristic_path_road_names"]
 
     similarities = 0
     path = list(dict.fromkeys(path))
@@ -108,8 +112,8 @@ for path, path_collection in tqdm(zip(generated_data, test_data), dynamic_ncols=
     recall += similarities / len(path)
     precision += similarities / len(ground_truth_path)
 
-recall = round(recall * weighted_factor, 2)
-precision = round(precision * weighted_factor, 2)
+recall = round(recall * weighted_factor * 100, 2)
+precision = round(precision * weighted_factor * 100, 2)
 
 
 file_updated_time = datetime.now().strftime("%Y-%m-%d %H-%M-%S")
@@ -140,3 +144,56 @@ print(results)
 # print(out_of_database_dissimilarities)
 # print(out_of_database_roads)
 # print(in_database_roads)
+
+heuristics = ["shortest", "fastest"]
+
+for heuristic in heuristics:
+    cprint(f"Dijkstra's algorithm performance with heuristic set to {heuristic}", "red")
+    recall, precision = 0, 0
+    weighted_factor = 1 / len(test_data)
+    # fmt:off
+    for path, path_collection in tqdm(zip(generated_data, test_data), dynamic_ncols=True):
+        if variables.path_type == "fastest":
+            ground_truth_path = path_collection["fastest_path_road_names"]
+        elif variables.path_type == "shortest":
+            ground_truth_path = path_collection["shortest_path_road_names"]
+        elif variables.path_type == "most_used":
+            ground_truth_path = path_collection["original_path_road_names"]
+        elif variables.path_type == "highway_free":
+            ground_truth_path = path_collection["highway_free_path_road_names"]
+        elif variables.path_type == "touristic":
+            ground_truth_path = path_collection["touristic_path_road_names"]
+    # fmt:on
+
+        similarities = 0
+        path = path_collection[f"{heuristic}_path_road_names"]
+        for road in path:
+            if road in ground_truth_path:
+                similarities += 1
+            elif road in road_names:
+                in_database_roads.add(road)
+                in_database_dissimilarities += 1
+            else:
+                out_of_database_dissimilarities += 1
+                out_of_database_roads.add(road)
+
+        recall += similarities / len(path)
+        precision += similarities / len(ground_truth_path)
+
+    recall = round(recall * weighted_factor * 100, 2)
+    precision = round(precision * weighted_factor * 100, 2)
+
+    results = f"\
+    *****************************************\n\
+    Evaluation results on {place_name} dataset for {variables.path_type} generation using:\n\
+    Evaluated at : {file_updated_time}\n\
+    Evaluation remarks : {variables.evaluation_remarks}\n\
+    docs_to_retrieve : {variables.number_of_docs_to_retrieve}\n\
+    llm : {variables.llm}\n\
+    embedding model : {variables.embedding_model}\n\
+    context set to: {variables.use_context} \n\n\
+    *****************************************\n\
+    Precision               : {precision} \n\
+    Recall                  : {recall}    \n\n"  # noqa: F405
+
+    print(results)

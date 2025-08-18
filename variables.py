@@ -6,7 +6,13 @@ args = get_args()
 place_name = args.place_name
 # dataset_usage = args.dataset_usage
 path_type = args.path_type
-map_path_type = {"fastest": "最快", "shortest": "最短", "most_used": ""}
+map_path_type = {
+    "fastest": "最快",
+    "shortest": "最短",
+    "most_used": "",
+    "highway_free": "不经过高速公路",
+    "touristic": "最适合观光旅游",
+}
 save_as = args.save_as
 use_context = args.use_context
 llm = args.llm

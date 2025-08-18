@@ -1,3 +1,4 @@
+import time
 import os
 
 os.environ["HF_ENDPOINT"] = "https://hf-mirror.com"
@@ -58,7 +59,7 @@ def generate_query(path_collection: dict[str, list]) -> tuple[str, str]:
     # fmt:off
 
     if variables.place_name in variables.chinese_cities:
-        retriever_query = (f"从{starting_address}到{destination_address}的{variables.map_path_type[variables.path_type]}路线是经过哪些路?")
+        retriever_query = (f"从{starting_address}到{destination_address}的{variables.map_path_type[variables.path_type]}的路线是经过哪些路?")
         llm_query = (retriever_query+ "你的回答中只能包含你推荐的路线所经过的路的名字，不要说别的，并用逗号分开路名。")
 
     elif variables.place_name in variables.other_cities:
@@ -226,12 +227,9 @@ def tokenize_corpus(corpus) -> List[List[str]]:
 
 
 if __name__ == "__main__":
-    document = f"pdf_docs/{variables.place_name}_paths_sample.pdf"
-    chroma_path = (
-        f"chroma_db/{variables.embedding_model_formatted_name}/{variables.place_name}/"  # noqa: F405
+    json_file_path = (
+        f"json_files/{variables.path_type}_paths/{variables.place_name}_paths.json"
     )
-
-    json_file_path = f"json_files/{variables.place_name}_paths.json"
     document = json.loads(Path(json_file_path).read_text())
     corpus = [routing["content"] for routing in document]
 
@@ -242,10 +240,17 @@ if __name__ == "__main__":
     corpus_tokens = bm25s.tokenize(corpus, token_pattern="chinese", stopwords="zh")
 
     cprint("Indexing the corpus...", "green")
+    start_time = time.time()
     retriever = bm25s.BM25()
     retriever.index(corpus_tokens)
+    end_time = time.time()
+    execution_time = end_time - start_time
+    cprint(
+        f"The amount of time it took to index the corpus is {execution_time:.4f} seconds",
+        "yellow",
+    )
 
-    f = open(f"test_data/{variables.place_name}_data", "rb")
+    f = open(f"test_data/{variables.path_type}_paths/{variables.place_name}_data", "rb")
     test_data = pickle.load(f)
     f.close()
 
@@ -258,6 +263,7 @@ if __name__ == "__main__":
     )
 
     cprint("\nRetrieving documents from the corpus using BM25...", "yellow")
+    start_time = time.time()
     number_of_documents_to_retrieve = 9
     bm25_top_results, _ = retriever.retrieve(
         retriever_queries_tokens,
@@ -265,17 +271,12 @@ if __name__ == "__main__":
         leave_progress=True,
         n_threads=-1,
     )
-
-    bm25_results_path = f"bm25_results/{variables.place_name}/{variables.path_type}/"
-    make_dir(bm25_results_path)
-    with open(bm25_results_path + "results", "wb") as f:
-        pickle.dump(bm25_top_results, f)
-    cprint("BM25 Search results saved.", "green")
-
-    bm25_results_path = f"bm25_results/{variables.place_name}/{variables.path_type}/"
-    f = open(bm25_results_path + "results", "rb")
-    bm25_top_results = pickle.load(f)
-    f.close()
+    end_time = time.time()
+    execution_time = end_time - start_time
+    cprint(
+        f"The amount of time it took to retrieve docs from the corpus is {execution_time:.4f} seconds",
+        "yellow",
+    )
 
     cprint("\nLoading embeddings...", "yellow")
     representation_model = HuggingFaceEmbeddings(
@@ -284,16 +285,12 @@ if __name__ == "__main__":
         encode_kwargs=variables.encode_kwargs,
         show_progress=False,
     )  # noqa: F405
-    cprint(
-        "Retrieving documents from the  refined corpus using semantic search...",
-        "green",
+
+    # fmt: off
+    cprint("Retrieving documents from the  refined corpus using semantic search...", "green",
     )
-    bm25_top_results_docs_ids = [
-        [doc_id for doc_id in result] for result in bm25_top_results
-    ]  # [[id1,..idn], ..., []]
-    bm25_top_results_docs = [
-        [corpus[id] for id in ids] for ids in bm25_top_results_docs_ids
-    ]  # [[str,..., str], ..., [str,..., str]]
+    bm25_top_results_docs_ids = [[doc_id for doc_id in result] for result in bm25_top_results]  # [[id1,..idn], ..., []]
+    bm25_top_results_docs = [[corpus[id] for id in ids] for ids in bm25_top_results_docs_ids]  # [[str,..., str], ..., [str,..., str]]
 
     cprint("Generating prompts...", "green")
     top_k = variables.number_of_docs_to_retrieve
@@ -303,28 +300,13 @@ if __name__ == "__main__":
         dynamic_ncols=True,
         total=len(retriever_queries),
     ):
-        retrieved_docs = retrieve_docs_from_refined_corpus(
-            retriever_query, bm25_results, k=top_k
-        )
-        prompt = get_prompt(
-            llm_query, retrieved_docs, use_context=variables.use_context
-        )
+        retrieved_docs = retrieve_docs_from_refined_corpus(retriever_query, bm25_results, k=top_k)
+        prompt = get_prompt(llm_query, retrieved_docs, use_context=variables.use_context)
         prompts.append(prompt)
         semantic_search_results.append(retrieved_docs)
 
-    retriever_results_filepath = (
-        f"retriever_results/{variables.place_name}/{variables.path_type}/"
-    )
-    make_dir(retriever_results_filepath)
-    with open(retriever_results_filepath + "semantic_search_results", "wb") as f:
-        pickle.dump(semantic_search_results, f)
-    cprint("Semantic search results saved.", "green")
-
-    prompts_filepath = f"prompts/{variables.place_name}/{variables.path_type}/"
-    make_dir(prompts_filepath)
-    with open(prompts_filepath + "prompts", "wb") as f:
-        pickle.dump(prompts, f)
-    cprint("Prompts saved.", "green")
+    retriever_results_filepath = (f"retriever_results/{variables.place_name}/{variables.path_type}/")
+    # fmt: on
 
     cprint("Inference..", "green")
     model = OllamaLLM(model="qwen2.5:14b-instruct")
@@ -340,4 +322,4 @@ if __name__ == "__main__":
     with open(file_path + file_name, "wb") as f:
         pickle.dump(results, f)
 
-    cprint(f"File saved at {file_path}{file_name} ", "green")
+    cprint(f"File saved at {file_path}/{file_name} ", "green")

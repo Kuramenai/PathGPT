@@ -8,10 +8,11 @@ import variables
 
 cprint("\n\nGENERATING PDF FILES FOR :", "yellow", attrs=["bold"])
 cprint(f"-DATASET : {variables.place_name}", "green")
-cprint(f"-SAVING AS : {variables.save_as}\n", "green")
+cprint(f"-SAVING AS : {variables.save_as}", "green")
+cprint(f"-PATH TYPE: {variables.path_type}\n", "green")
 
 
-data = f"train_data/{variables.place_name}_data"
+data = f"train_data/{variables.path_type}_paths/{variables.place_name}_data"
 
 cprint("Loading data...", "light_yellow")
 
@@ -39,6 +40,7 @@ elif variables.args.save_as == "all_paths_one_doc":
         original_path_road_names = path_info["original_path_road_names"]
         shortest_path_road_names = path_info["shortest_path_road_names"]
         fastest_path_road_names = path_info["fastest_path_road_names"]
+        touristic_path_road_names = path_info["touristic_path_road_names"]
 
         starting_address = original_path_road_names[0]
         destination_address = original_path_road_names[-1]
@@ -46,12 +48,14 @@ elif variables.args.save_as == "all_paths_one_doc":
         routing_info = {
             "content": f"从{starting_address}到{destination_address}的最常走的路线是经过{'，'.join(original_path_road_names)}这几个路段。\n\
 而从{starting_address}到{destination_address}的最短的路线是经过{'，'.join(shortest_path_road_names)}这些路。\n\
-另外同样从{starting_address}到{destination_address}的最快路线是经过{'，'.join(fastest_path_road_names)}这些路。\n"
+另外同样从{starting_address}到{destination_address}的最快路线是经过{'，'.join(fastest_path_road_names)}这些路。从{starting_address}到{destination_address}最适合观光旅游的路线是经过{'，'.join(touristic_path_road_names)}这些路。\n"
         }
 
         routing_database.append(routing_info)
 
     with open(
-        f"json_files/{variables.place_name}_paths.json", "w", encoding="utf-8"
+        f"json_files/{variables.path_type}_paths/{variables.place_name}_paths.json",
+        "w",
+        encoding="utf-8",
     ) as f:
         json.dump(routing_database, f, indent=2, ensure_ascii=False)
