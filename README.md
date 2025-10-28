@@ -1,4 +1,4 @@
-# PathGPT: Leveraging Large Language Models for Personalized Route Generation
+# Reframing Path Recommendation as a Natural Language Generation Task with Retrieval-Augmented Language Models
 
 This repository hosts the implementation code of the paper PathGPT: Reframing Route Recommendation as a Natural Language Task using Retrieved Augmented Language Models.
 
@@ -180,5 +180,6 @@ Overall performance of PathGPT with:
 
 
   
+
 
 
