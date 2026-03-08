@@ -1,13 +1,14 @@
 # %%
 import os
-import sys
+import re
+import ast
 import pickle
 import random
 import osmnx as ox
-import geopandas as gpd
 import networkx as nx
 import concurrent.futures
 import variables
+import geopandas as gpd
 from functools import partial
 from itertools import groupby
 from tqdm import tqdm
@@ -74,10 +75,6 @@ def edge_id_to_node_id(path: List[int]) -> List[int]:
     Returns:
         List[int]: List of nodes ids.
     """
-
-    if len(path) < 2:
-        raise ValueError("Path too short")
-
     nodes = []
     # 1. Determine the start node and the first shared node using the first two edges
     u1, v1, k1 = edge_id_to_uvk[path[0]]
@@ -128,8 +125,15 @@ def load_graph(fname: str) -> any:
     """
 
     cprint("\nLoading graph...", "light_yellow")
-    f = open(fname, "rb")
-    graph = pickle.load(f)
+    try:
+        with open(fname, "rb") as f:
+            graph = pickle.load(f)
+    except FileNotFoundError:
+        cprint(f"ERROR: Graph file not found at {fname}", "red")
+        raise
+    except Exception as e:
+        cprint(f"ERROR: Failed to load graph: {e}", "red")
+        raise
 
     # Add edge speeds and travel times as weights to road network graph in order to compute fastest and shortest paths
     ox.add_edge_speeds(graph)
@@ -180,8 +184,15 @@ def load_data(fname: str, less: bool = False, samples: int = 35_000) -> List[Lis
         List[Tuple[List[int]]]: A list of historical trajectories given by a sequence of nodes ids.
     """
     cprint("\nLoading data", "blue")
-    with open(fname, "rb") as f:
-        data = pickle.load(f)
+    try:
+        with open(fname, "rb") as f:
+            data = pickle.load(f)
+    except FileNotFoundError:
+        cprint(f"ERROR: DATA file not found at {fname}", "red")
+        raise
+    except Exception as e:
+        cprint(f"ERROR: Failed to load DATA: {e}", "red")
+        raise
 
     # Sampling data
     if less:
@@ -211,30 +222,105 @@ def load_data(fname: str, less: bool = False, samples: int = 35_000) -> List[Lis
     return data
 
 
-def get_path_with_edges_names(
-    path: List[int], edges_names: Dict[Tuple[int, int], str]
-) -> List[str]:
+def clean_street_name(raw_name: any, prefer_chinese: bool = True) -> str:
     """
-    Given a sequence of node ids, map each consecutive pair (source and target) to an edge name.
+    Cleans messy OSMnx street names. Extracts the primary name from lists,
+    splits bilingual strings, and removes secondary intersection names.
 
     Args:
-        path (List[int]): a sequence of node ids.
-        map_uv_to_edges_names (Dict[Tuple[int, int], str]): dictionary that map a pair of node ids to a road name.
+        raw_name (any): _description_
+        prefer_chinese (bool, optional): _description_. Defaults to True.
+
+    Returns:
+        str: clean street name
+    """
+    # 1. If the name is missing, just return "Unnamed Road"
+    if raw_name is None:
+        return "Unnamed Road"
+
+    # 2. Safely extract the string(s) into a Python list
+    name_list = []
+    if isinstance(raw_name, list):
+        name_list = raw_name
+    elif isinstance(raw_name, str):
+        if raw_name.startswith("[") and raw_name.endswith("]"):
+            try:
+                parsed_list = ast.literal_eval(raw_name)
+                if isinstance(parsed_list, list):
+                    name_list = parsed_list
+            except (ValueError, SyntaxError):
+                name_list = [raw_name]
+        else:
+            name_list = [raw_name]
+    else:
+        return "Unnamed Road"
+
+    if not name_list:
+        return "Unnamed Road"
+
+    # 3. Handle Lists: e.g.,['Confucian Temple Street', '文庙街']
+    chosen_name = name_list[0]
+    for n in name_list:
+        # Check if the string contains Chinese characters
+        has_chinese = bool(re.search(r"[\u4e00-\u9fff]", n))
+        if prefer_chinese and has_chinese:
+            chosen_name = n
+            break
+        elif not prefer_chinese and not has_chinese:
+            chosen_name = n
+            break
+
+    # 4. Clean Bilingual & Intersections: e.g., '嵩山路 - Songshan Road' or '友谊东路·东北新街'
+    # Split by known OSM delimiters
+    for delimiter in [" - ", "-", "·", "/"]:
+        if delimiter in chosen_name:
+            parts = chosen_name.split(delimiter)
+
+            # Find the part that matches our language preference
+            for part in parts:
+                has_chinese = bool(re.search(r"[\u4e00-\u9fff]", part))
+                if (prefer_chinese and has_chinese) or (
+                    not prefer_chinese and not has_chinese
+                ):
+                    chosen_name = part.strip()
+                    break
+            else:
+                # If neither strictly matches, just take the first part
+                chosen_name = parts[0].strip()
+            break  # Stop checking delimiters once we successfully split
+
+    return chosen_name.strip()
+
+
+def get_path_with_edges_names(
+    edge_path: List[int], edge_id_to_edge_name: Dict[int, str]
+) -> List[str]:
+    """
+    Given a sequence of edges ids, map each edge id to an edge name.
+
+    Args:
+        edge_path (List[int]): a sequence of edges ids.
+        map_uv_to_edges_names (Dict[int, str]): dictionary that map a pair of node ids u, v and a key k to a road name.
 
     Returns:
         List[str]: a sequence of edges names.
     """
-
     path_with_edges_names = []
-    for node1, node2 in zip(path, path[1:]):
-        if (node1, node2) in edges_names:
-            edge_name = edges_names[(node1, node2)]
-            path_with_edges_names.append(edge_name.strip())
-        else:
-            return []
+    for edge_id in edge_path:
+        if edge_id in edge_id_to_edge_name:
+            raw_name = edge_id_to_edge_name[edge_id]
 
-    # remove duplicates an edge may pass through different intersections(node)
+            # Pass the messy string to our new cleaner function!
+            # Change to prefer_chinese=False if English translations are available
+            clean_name = clean_street_name(raw_name, prefer_chinese=True)
+
+            path_with_edges_names.append(clean_name)
+        else:
+            path_with_edges_names.append("Unnamed Road")
+
+    # Remove consecutive duplicates (so a car driving down the same road doesn't log it 5 times)
     path_with_edges_names = [k for k, g in groupby(path_with_edges_names)]
+
     return path_with_edges_names
 
 
@@ -261,7 +347,7 @@ def calculate_edge_fuel_efficiency_weight(u: int, v: int, data) -> int:
 
     # Base travel time in SECONDS
     # (Distance in km / Speed in km/h) * 3600 seconds/hour
-    # time_seconds = (length_km / speed_kph) * 3600
+    time_seconds = (length_km / speed_kph) * 3600
 
     # --- fuel efficiency curve (Internal Combustion Engine) ---
     if speed_kph < 30:
@@ -306,7 +392,7 @@ def calculate_edge_fuel_efficiency_weight(u: int, v: int, data) -> int:
         )
 
     # Calculate final eco-cost
-    cost = ((length_km * speed_factor) + stop_penalty_seconds) * highway_penalty
+    cost = ((time_seconds * speed_factor) + stop_penalty_seconds) * highway_penalty
 
     return cost
 
@@ -362,7 +448,6 @@ def compute_paths(
 
 def augment_data(
     data: List[Tuple[int, List[int], Tuple[int, int]]],
-    edges_names: Dict[Tuple[int, int], str],
     graph: nx.MultiDiGraph,
     custom_path_type: str = "fuel_efficient",
     n_cores: int = 12,
@@ -373,14 +458,11 @@ def augment_data(
     Args:
         data (List[Tuple[int, List[int], int]]): A list of historical trajectories where each trajectory is expressed in the format of the following tuple (idx, t, timestamps).
         graph (nx.MultiGraph): MultiDiGraph representing the road network.
-        edges_names (Dict[Tuple[int, int], str]): Dictionary that map a pair of node ids to an edge name.
         n_cores (int, optional) : Number of cores to be used for computing the paths.
 
     Returns:
-        Tuple[List[Dict[str, List[int]]], List[Tuple[int, List[int], int]]]: Tuple containing a list of dictionaries and a list of tuples.
-        The list of dictionaries is a list where each dictionary contains the edges names of a historical path plus its fastest and shortest path as well.
-        These can be retreived by using the keys "most_used", "fastest" and "shortest" respectively.
-        In the list of tuples, each tuple is in the original format of the data i.e (idx, t, timestamps).
+        [List[Dict[str, List[int]]]: List of dictionaries and a list of tuples.
+        The list of dictionaries is a list where each dictionary contains the edges names of a historical path plus the fastest, shortest and custom paths.
     """
     cprint("\nAugmenting data...", "light_yellow")
 
@@ -418,57 +500,131 @@ def augment_data(
 
     # fmt: off
     cprint("Adding edges names...", "light_green")
-    neuromlr_data, dataset = [], []
-    for path_index, (
-        original_path,
-        fastest_path,
-        shortest_path,
-        custom_path,
-    ) in tqdm(enumerate(data), dynamic_ncols=True):
-        original_path_with_edges_names = get_path_with_edges_names(
-            original_path, edges_names
-        )
-        fastest_path_with_edges_names = get_path_with_edges_names(
-            fastest_path, edges_names
-        )
-        shortest_path_with_edges_names = get_path_with_edges_names(
-            shortest_path, edges_names
-        )
+    dataset = []
+    for path_index, (original_path, fastest_path, shortest_path, custom_path,) in tqdm(enumerate(data), dynamic_ncols=True):
+        
+        path_collection = {}
+        path_collection["idx"] = data_copy[path_index][0]
+        path_collection["timestamps"] = data_copy[path_index][-1]
 
-        custom_path_with_edges_names = get_path_with_edges_names(
-            custom_path, edges_names
-        )
+        path_collection["original_path_edges"] = data_copy[path_index][1]
+        path_collection["fastest_path_edges"] = remap_to_edges(fastest_path, graph, weight_metric="travel_time")
+        path_collection["shortest_path_edges"] = remap_to_edges(shortest_path, graph, weight_metric="length")
+        path_collection["custom_path_edges"] = remap_to_edges(custom_path, graph, weight_metric=custom_weight_key)
 
-        if (
-            len(original_path_with_edges_names) >= 3
-            and len(fastest_path_with_edges_names) >= 3
-            and len(shortest_path_with_edges_names) >= 3
-            and len(custom_path_with_edges_names) >= 3
-        ):
-            # fmt: off
-            path_collection = {}
-            path_collection["idx"] = data_copy[path_index][0]
-            path_collection["timestamps"] = data_copy[path_index][-1]
-
-            path_collection["original_path_edges"] = data_copy[path_index][1]
-            path_collection["fastest_path_edges"] = remap_to_edges(fastest_path, graph, weight_metric="travel_time")
-            path_collection["shortest_path_edges"] = remap_to_edges(shortest_path, graph, weight_metric="length")
-            path_collection["custom_path_edges"] = remap_to_edges(custom_path, graph, weight_metric=custom_weight_key)
-
-            path_collection["original_path_edges_names"] = original_path_with_edges_names
-            path_collection["fastest_path_edges_names"] = fastest_path_with_edges_names
-            path_collection["shortest_path_edges_names"] = shortest_path_with_edges_names
-            path_collection["custom_path_edges_names"] = custom_path_with_edges_names
-            dataset.append(path_collection)
-            neuromlr_data.append(data_copy[path_index])
-        else:
-            continue
-        # fmt: on
+        dataset.append(path_collection)
+    # fmt: on
 
     cprint("Data augmentation done!", "green")
-    cprint(f"PathGPT's dataset length : {len(dataset)}", "blue")
-    cprint(f"NeuroMLR's dataset length : {len(neuromlr_data)}", "red")
-    return dataset, neuromlr_data
+    return dataset
+
+
+def compute_jaccard_similarity(
+    path1: List[int], path2: List[int], edge_lengths: Dict[int, float]
+) -> float:
+    """Compute the Jaccard similarity score between two given paths based on the edges lengths.
+
+    Args:
+        path1 (List[int]): path1
+        path2 (List[int]): path2
+        edge_lengths (Dict[int, float]): a dictionary that maps edge ids to their lengths.
+
+    Returns:
+        int: _description_
+    """
+
+    s1 = set(path1)
+    s2 = set(path2)
+    intersection = s1.intersection(s2)
+    union = s1.union(s2)
+
+    intersection_length = sum(edge_lengths.get(e, 0) for e in intersection)
+    union_length = sum(edge_lengths.get(e, 0) for e in union)
+
+    if union_length == 0:
+        return 0.0
+
+    similarity = intersection_length / union_length
+
+    return similarity
+
+
+def filter_dataset(
+    dataset: List[Dict[str, List[int]]],
+    edge_lengths: Dict[int, float],
+    edge_id_to_edge_name: Dict[int, str],
+    diversity_threshold: float = 0.6,
+    min_path_length: int = 3,
+) -> List[Dict[str, List[int]]]:
+    """Only keep paths that are relatively diverse and long enough
+
+    Args:
+        dataset (List[Dict[str, List[int]]]): dataset to be filtered.
+        edge_lengths (Dict[int, float]): a dictionary that maps edge ids to their lengths.
+        edge_id_to_edge_name (Dict[int, str]): a dictionary that maps edge ids to their corresponding edge names.
+        diversity_threshold (int) : Determine the similarity between two paths.
+        path_length (int) : Minimum length for a path to be considered.
+
+    Returns:
+        List[Dict[str, List[int]]]: _description_
+    """
+    filtered_dataset = []
+    for path_collection in tqdm(dataset, dynamic_ncols=True):
+        custom_path = path_collection["custom_path_edges"]
+        original_path = path_collection["original_path_edges"]
+        fastest_path = path_collection["fastest_path_edges"]
+        shortest_path = path_collection["shortest_path_edges"]
+
+        # fmt: off
+        similarity = compute_jaccard_similarity(custom_path, original_path, edge_lengths)
+        if similarity > diversity_threshold:
+            continue
+
+        similarity = compute_jaccard_similarity(custom_path, fastest_path, edge_lengths)
+        if similarity > diversity_threshold:
+            continue
+
+        similarity = compute_jaccard_similarity(custom_path, shortest_path, edge_lengths)
+        if similarity > diversity_threshold:
+            continue
+
+
+        original_path_with_edges_names  = get_path_with_edges_names(original_path, edge_id_to_edge_name)
+        fastest_path_with_edges_names   = get_path_with_edges_names(fastest_path, edge_id_to_edge_name)
+        shortest_path_with_edges_names  = get_path_with_edges_names(shortest_path, edge_id_to_edge_name)
+        custom_path_with_edges_names    = get_path_with_edges_names(custom_path, edge_id_to_edge_name)
+
+        # fmt: on
+        if any(
+            "Unnamed Road" in path
+            for path in [
+                original_path_with_edges_names,
+                fastest_path_with_edges_names,
+                shortest_path_with_edges_names,
+                custom_path_with_edges_names,
+            ]
+        ):
+            continue
+
+        if any(
+            len(path) < min_path_length
+            for path in [
+                original_path_with_edges_names,
+                fastest_path_with_edges_names,
+                shortest_path_with_edges_names,
+                custom_path_with_edges_names,
+            ]
+        ):
+            continue
+
+        path_collection["original_path_edges_names"] = original_path_with_edges_names
+        path_collection["fastest_path_edges_names"] = fastest_path_with_edges_names
+        path_collection["shortest_path_edges_names"] = shortest_path_with_edges_names
+        path_collection["custom_path_edges_names"] = custom_path_with_edges_names
+
+        filtered_dataset.append(path_collection)
+
+    return filtered_dataset
 
 
 def sanity_check(
@@ -571,72 +727,86 @@ def save_file(file_path: str, file: any) -> None:
 if __name__ == "__main__":
     welcome_text()
 
+    # Load graph
+    try:
+        graph = load_graph(fname=variables.PICKLED_GRAPH)
+    except Exception as e:
+        cprint(f"FATAL: Could not load graph: {e}", "red")
+        exit(1)
+
     edges_df = gpd.read_file(variables.EDGE_DATA)
+
     edge_id_to_uvk = {i: (row.u, row.v, row.key) for i, row in edges_df.iterrows()}
     uvk_to_edge_id = {(row.u, row.v, row.key): i for i, row in edges_df.iterrows()}
+    edge_id_to_edge_length = {i: (row.length) for i, row in edges_df.iterrows()}
 
-    train_data = load_data(fname=variables.TRAIN_TRIP_DATA_PICKLED_WITH_TIMESTAMPS)
-    test_data = load_data(fname=variables.TEST_TRIP_DATA_PICKLED_WITH_TIMESTAMPS)
+    edge_id_to_edge_name = {
+        i: row.get("name", "Unnamed Road") for i, row in edges_df.iterrows()
+    }
 
-    graph = load_graph(fname=variables.PICKLED_GRAPH)
-
-    script_dir = os.path.dirname(os.path.abspath(__file__))
-    edges_names_file = f"edges_names/{variables.place_name}_edges_names"
-    edges_names_file = os.path.join(script_dir, edges_names_file)
+    # Load data
     try:
-        if os.path.exists(edges_names_file):
-            with open(edges_names_file, "rb") as f:
-                edges_names = pickle.load(f)
-    except FileNotFoundError:
-        cprint(f"File {edges_names_file} not found!", "red")
-        cprint("Extract edges names with extract_edges_names.py first", "yellow")
-        sys.exit(1)
+        train_data = load_data(fname=variables.TRAIN_TRIP_DATA_PICKLED_WITH_TIMESTAMPS)
+        test_data = load_data(fname=variables.TEST_TRIP_DATA_PICKLED_WITH_TIMESTAMPS)
     except Exception as e:
-        print(f"An unexpected error occurred: {e}")
-        sys.exit(1)
+        cprint(f"FATAL: Could not load data: {e}", "red")
+        exit(1)
 
+    n_cores = os.cpu_count()
     custom_path_type = variables.path_type
-    augmented_train_data, neuromlr_train_data = augment_data(
+
+    # ===== TRAIN DATA =====
+    cprint("\n" + "=" * 50, "light_yellow")
+    cprint("PROCESSING TRAINING DATA", "light_yellow", attrs=["bold"])
+    cprint("=" * 50, "light_yellow")
+
+    augmented_train_data = augment_data(
         data=train_data,
-        edges_names=edges_names,
         graph=graph,
         custom_path_type=custom_path_type,
-        n_cores=16,
+        n_cores=n_cores,
     )
 
-    save_file("train_data", file=augmented_train_data)
-    save_file("neuromlr_train_data", file=neuromlr_train_data)
+    filtered_train_data = filter_dataset(
+        augmented_train_data, edge_id_to_edge_length, edge_id_to_edge_name
+    )
 
-    augmented_test_data, neuromlr_test_data = augment_data(
+    save_file("train_data", file=filtered_train_data)
+
+    cprint(
+        f"Filtered train data: {len(augmented_train_data)} → {len(filtered_train_data)}",
+        "cyan",
+    )
+
+    if len(filtered_train_data) == 0:
+        cprint("WARNING: Train dataset is empty after filtering!", "red")
+
+    # ===== TEST DATA =====
+    cprint("\n" + "=" * 50, "light_yellow")
+    cprint("PROCESSING TEST DATA", "light_yellow", attrs=["bold"])
+    cprint("=" * 50, "light_yellow")
+
+    augmented_test_data = augment_data(
         data=test_data,
-        edges_names=edges_names,
         graph=graph,
         custom_path_type=custom_path_type,
-        n_cores=16,
+        n_cores=n_cores,
     )
 
-    save_file("test_data", file=augmented_test_data)
-    save_file("neuromlr_test_data", file=neuromlr_test_data)
-
-    train_dataset_dissimilarities = sanity_check(
-        neuromlr_train_data, augmented_train_data
+    filtered_test_data = filter_dataset(
+        augmented_test_data, edge_id_to_edge_length, edge_id_to_edge_name
     )
 
-    if train_dataset_dissimilarities > 0:
-        cprint(
-            f"Incoherence between paths with edges names extracted from edges ids and paths with street names extracted from nodes ids.\
-            Found {train_dataset_dissimilarities} dissimilarities in train data.",
-            "red",
-        )
-    else:
-        cprint("Sanity check passed for train dataset", "green")
+    cprint(
+        f"Filtered train data: {len(augmented_test_data)} → {len(filtered_test_data)}",
+        "cyan",
+    )
 
-    test_dataset_dissimilarities = sanity_check(neuromlr_test_data, augmented_test_data)
-    if test_dataset_dissimilarities > 0:
-        cprint(
-            f"Incoherence between paths with edges names extracted from edges ids and paths with street names extracted from nodes ids.\
-            Found {test_dataset_dissimilarities} dissimilarities in test data.",
-            "red",
-        )
-    else:
-        cprint("Sanity check passed for test dataset", "green")
+    if len(filtered_test_data) == 0:
+        cprint("WARNING: Train dataset is empty after filtering!", "red")
+
+    save_file("test_data", file=filtered_test_data)
+
+    cprint("\n" + "=" * 50, "light_green", attrs=["bold"])
+    cprint("DATASET GENERATION COMPLETE!", "light_green", attrs=["bold"])
+    cprint("=" * 50, "light_green")
