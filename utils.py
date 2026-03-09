@@ -24,7 +24,7 @@ def get_args():
     parser.add_argument("-place_name", default="harbin", type=str)
     # parser.add_argument("-dataset_usage", default="test", type=str)
     parser.add_argument("-save_as", default="all_paths_one_doc", type=str)
-    parser.add_argument("-path_type", default="touristic", type=str)
+    parser.add_argument("-path_type", default="fuel_efficient", type=str)
     parser.add_argument("-use-context", default=False, action="store_true")
     parser.add_argument("-llm", default="qwen2.5-14b", type=str)
     parser.add_argument(

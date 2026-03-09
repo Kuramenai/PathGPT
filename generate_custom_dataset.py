@@ -1,7 +1,4 @@
 # %%
-import os
-import re
-import ast
 import pickle
 import random
 import osmnx as ox
@@ -9,8 +6,8 @@ import networkx as nx
 import concurrent.futures
 import variables
 import geopandas as gpd
+import numpy as np
 from functools import partial
-from itertools import groupby
 from tqdm import tqdm
 from termcolor import cprint
 from utils import make_dir
@@ -113,7 +110,7 @@ def edge_id_to_node_id(path: List[int]) -> List[int]:
     # ]
 
 
-def load_graph(fname: str) -> any:
+def load_graph(fname: str) -> nx.MultiDiGraph:
     """
     Load the graph associated with a road network.
 
@@ -121,7 +118,7 @@ def load_graph(fname: str) -> any:
         fname (str): path of the graph file stored  locally.
 
     Returns:
-        any: graph of the road network
+        graph (nx.MultiDiGraph): graph of the road network
     """
 
     cprint("\nLoading graph...", "light_yellow")
@@ -130,48 +127,62 @@ def load_graph(fname: str) -> any:
             graph = pickle.load(f)
     except FileNotFoundError:
         cprint(f"ERROR: Graph file not found at {fname}", "red")
-        raise
+        raise SystemExit(1)
     except Exception as e:
         cprint(f"ERROR: Failed to load graph: {e}", "red")
-        raise
+        raise SystemExit(1)
 
     # Add edge speeds and travel times as weights to road network graph in order to compute fastest and shortest paths
     ox.add_edge_speeds(graph)
     ox.add_edge_travel_times(graph)
 
-    edges = ox.graph_to_gdfs(graph, nodes=False)[
-        ["highway", "travel_time"]
-    ].reset_index(drop=True)
-    edges["highway"] = edges["highway"].apply(
-        lambda x: x[0] if isinstance(x, list) else x
-    )
+    # fmt: off
+    edges = ox.graph_to_gdfs(graph, nodes=False)[["highway", "travel_time", "speed_kph"]].reset_index(drop=True)
+
+    edges["highway"] = edges["highway"].apply(lambda x: x[0] if isinstance(x, list) else x)
+
+    # mean_travel_times = (edges.groupby("highway")["travel_time"].mean().round(3).to_dict())
+    # overall_mean = edges["travel_time"].mean()
+
+    default_speed = 40.0  # Default speed in kph if highway type is missing
+    speed_lookup = (edges.groupby("highway")["speed_kph"].mean().round(3).to_dict())
 
     edges_with_missing_travel_values = 0
     for u, v, k, data in graph.edges(keys=True, data=True):
         # Here we divide the length of each edge by 1000 just to maintain consistency with NeuroMLR (although I am not sure why they did that)
-        data["length"] = data["length"] / 1000
+        # data["length"] = data["length"] / 1000
+        
         # The travel times are missing for some edges (equals to 0),
         # in that case we replace it with the mean value of the travel times of all edges of the same type
         if data["travel_time"] == 0:
             edges_with_missing_travel_values += 1
-            data["travel_time"] = (
-                edges.loc[edges["highway"] == data["highway"]]["travel_time"]
-                .mean()
-                .round(1)
-            )
-
+            
+            # data["travel_time"] = mean_travel_times.get(data["highway"], overall_mean).round(1)
+            
+            highway = data["highway"]
+            if isinstance(highway, list):
+                highway = highway[0]
+                
+            speed_kmh = speed_lookup.get(highway, default_speed)
+            speed_ms = speed_kmh / 3.6  # Convert km/h to m/s
+            
+            travel_time = data["length"] / speed_ms
+            data["travel_time"] = round(travel_time, 3)
+        
+        data["travel_time"] *= np.random.uniform(0.999, 1.001)
         data["fuel_cost"] = calculate_edge_fuel_efficiency_weight(u, v, data)
 
-    f.close()
-    cprint(
-        f"The number of edges with missing travel times found is {edges_with_missing_travel_values}"
-    )
+    cprint(f"The number of edges with missing travel times found is {edges_with_missing_travel_values}")
 
     cprint("Graph loaded successfully!", "green")
     return graph
 
+    # fmt: on
 
-def load_data(fname: str, less: bool = False, samples: int = 35_000) -> List[List[int]]:
+
+def load_data(
+    fname: str, less: bool = False, samples: int = 35_000
+) -> List[Tuple[int, List[int], int]]:
     """
     Load the data.
 
@@ -181,7 +192,7 @@ def load_data(fname: str, less: bool = False, samples: int = 35_000) -> List[Lis
         samples (int, optional): _description_. Defaults to 35_000.
 
     Returns:
-        List[Tuple[List[int]]]: A list of historical trajectories given by a sequence of nodes ids.
+        List[Tuple[int, List[int], int]]: A list of historical trajectories where each trajectory is in the format of (idx, path, timestamps).
     """
     cprint("\nLoading data", "blue")
     try:
@@ -189,10 +200,10 @@ def load_data(fname: str, less: bool = False, samples: int = 35_000) -> List[Lis
             data = pickle.load(f)
     except FileNotFoundError:
         cprint(f"ERROR: DATA file not found at {fname}", "red")
-        raise
+        raise SystemExit(1)
     except Exception as e:
         cprint(f"ERROR: Failed to load DATA: {e}", "red")
-        raise
+        raise SystemExit(1)
 
     # Sampling data
     if less:
@@ -220,108 +231,6 @@ def load_data(fname: str, less: bool = False, samples: int = 35_000) -> List[Lis
     ]
 
     return data
-
-
-def clean_street_name(raw_name: any, prefer_chinese: bool = True) -> str:
-    """
-    Cleans messy OSMnx street names. Extracts the primary name from lists,
-    splits bilingual strings, and removes secondary intersection names.
-
-    Args:
-        raw_name (any): _description_
-        prefer_chinese (bool, optional): _description_. Defaults to True.
-
-    Returns:
-        str: clean street name
-    """
-    # 1. If the name is missing, just return "Unnamed Road"
-    if raw_name is None:
-        return "Unnamed Road"
-
-    # 2. Safely extract the string(s) into a Python list
-    name_list = []
-    if isinstance(raw_name, list):
-        name_list = raw_name
-    elif isinstance(raw_name, str):
-        if raw_name.startswith("[") and raw_name.endswith("]"):
-            try:
-                parsed_list = ast.literal_eval(raw_name)
-                if isinstance(parsed_list, list):
-                    name_list = parsed_list
-            except (ValueError, SyntaxError):
-                name_list = [raw_name]
-        else:
-            name_list = [raw_name]
-    else:
-        return "Unnamed Road"
-
-    if not name_list:
-        return "Unnamed Road"
-
-    # 3. Handle Lists: e.g.,['Confucian Temple Street', '文庙街']
-    chosen_name = name_list[0]
-    for n in name_list:
-        # Check if the string contains Chinese characters
-        has_chinese = bool(re.search(r"[\u4e00-\u9fff]", n))
-        if prefer_chinese and has_chinese:
-            chosen_name = n
-            break
-        elif not prefer_chinese and not has_chinese:
-            chosen_name = n
-            break
-
-    # 4. Clean Bilingual & Intersections: e.g., '嵩山路 - Songshan Road' or '友谊东路·东北新街'
-    # Split by known OSM delimiters
-    for delimiter in [" - ", "-", "·", "/"]:
-        if delimiter in chosen_name:
-            parts = chosen_name.split(delimiter)
-
-            # Find the part that matches our language preference
-            for part in parts:
-                has_chinese = bool(re.search(r"[\u4e00-\u9fff]", part))
-                if (prefer_chinese and has_chinese) or (
-                    not prefer_chinese and not has_chinese
-                ):
-                    chosen_name = part.strip()
-                    break
-            else:
-                # If neither strictly matches, just take the first part
-                chosen_name = parts[0].strip()
-            break  # Stop checking delimiters once we successfully split
-
-    return chosen_name.strip()
-
-
-def get_path_with_edges_names(
-    edge_path: List[int], edge_id_to_edge_name: Dict[int, str]
-) -> List[str]:
-    """
-    Given a sequence of edges ids, map each edge id to an edge name.
-
-    Args:
-        edge_path (List[int]): a sequence of edges ids.
-        map_uv_to_edges_names (Dict[int, str]): dictionary that map a pair of node ids u, v and a key k to a road name.
-
-    Returns:
-        List[str]: a sequence of edges names.
-    """
-    path_with_edges_names = []
-    for edge_id in edge_path:
-        if edge_id in edge_id_to_edge_name:
-            raw_name = edge_id_to_edge_name[edge_id]
-
-            # Pass the messy string to our new cleaner function!
-            # Change to prefer_chinese=False if English translations are available
-            clean_name = clean_street_name(raw_name, prefer_chinese=True)
-
-            path_with_edges_names.append(clean_name)
-        else:
-            path_with_edges_names.append("Unnamed Road")
-
-    # Remove consecutive duplicates (so a car driving down the same road doesn't log it 5 times)
-    path_with_edges_names = [k for k, g in groupby(path_with_edges_names)]
-
-    return path_with_edges_names
 
 
 def calculate_edge_fuel_efficiency_weight(u: int, v: int, data) -> int:
@@ -436,14 +345,17 @@ def compute_paths(
 
     start_node, destination_node = path[0], path[-1]
     original_path = path
-
+    # fmt: off
     # Compute fastest, shortest path and a custom path.
-    fastest_path = nx.shortest_path(graph, start_node, destination_node, "travel_time")
-    shortest_path = nx.shortest_path(graph, start_node, destination_node, "length")
-    highway_free_path = nx.shortest_path(
-        graph, start_node, destination_node, weight=custom_weight
-    )
-    return (original_path, fastest_path, shortest_path, highway_free_path)
+    try:
+        fastest_path = nx.shortest_path(graph, start_node, destination_node, "travel_time")
+        shortest_path = nx.shortest_path(graph, start_node, destination_node, "length")
+        highway_free_path = nx.shortest_path(graph, start_node, destination_node, weight=custom_weight)
+        
+        return (original_path, fastest_path, shortest_path, highway_free_path)
+    except nx.NetworkXNoPath:
+        return []
+    # fmt: on
 
 
 def augment_data(
@@ -453,10 +365,10 @@ def augment_data(
     n_cores: int = 12,
 ) -> List[Dict[str, List[int]]]:
     """
-    Generate new dataset containing the original paths and the newly computed fastest and shortest paths using the names of the roads traversed instead of the nodes ids.
+    Generate new dataset containing the original paths and the newly computed fastest, shortest and new custom paths.
 
     Args:
-        data (List[Tuple[int, List[int], int]]): A list of historical trajectories where each trajectory is expressed in the format of the following tuple (idx, t, timestamps).
+        data (List[Tuple[int, List[int], int]]): A list of historical trajectories where each trajectory is expressed in the format of the following tuple (idx, path, timestamps).
         graph (nx.MultiGraph): MultiDiGraph representing the road network.
         n_cores (int, optional) : Number of cores to be used for computing the paths.
 
@@ -468,12 +380,11 @@ def augment_data(
 
     data_copy = deepcopy(data)
 
-    # Each instance of the data will now be a sequence of nodes ID, we will use these nodes to compute new paths later
     data = [t for (idx, t, timestamps) in tqdm(data, dynamic_ncols=True)]
 
     valid_data = []
     valid_data_copy = []
-
+    # Each instance of the data will now be a sequence of nodes ID, we will use these nodes to compute new paths later
     for i, path in tqdm(enumerate(data), total=len(data), dynamic_ncols=True):
         try:
             node_path = edge_id_to_node_id(path)
@@ -499,10 +410,14 @@ def augment_data(
         )
 
     # fmt: off
-    cprint("Adding edges names...", "light_green")
+    cprint("Building dataset...", "light_green")
     dataset = []
-    for path_index, (original_path, fastest_path, shortest_path, custom_path,) in tqdm(enumerate(data), dynamic_ncols=True):
+    for path_index, paths in tqdm(enumerate(data), total=len(data), dynamic_ncols=True):
         
+        if not paths:
+            continue
+        
+        original_path, fastest_path, shortest_path, custom_path = paths
         path_collection = {}
         path_collection["idx"] = data_copy[path_index][0]
         path_collection["timestamps"] = data_copy[path_index][-1]
@@ -510,121 +425,13 @@ def augment_data(
         path_collection["original_path_edges"] = data_copy[path_index][1]
         path_collection["fastest_path_edges"] = remap_to_edges(fastest_path, graph, weight_metric="travel_time")
         path_collection["shortest_path_edges"] = remap_to_edges(shortest_path, graph, weight_metric="length")
-        path_collection["custom_path_edges"] = remap_to_edges(custom_path, graph, weight_metric=custom_weight_key)
+        path_collection[f"{custom_path_type}_path_edges"] = remap_to_edges(custom_path, graph, weight_metric=custom_weight_key)
 
         dataset.append(path_collection)
     # fmt: on
 
     cprint("Data augmentation done!", "green")
     return dataset
-
-
-def compute_jaccard_similarity(
-    path1: List[int], path2: List[int], edge_lengths: Dict[int, float]
-) -> float:
-    """Compute the Jaccard similarity score between two given paths based on the edges lengths.
-
-    Args:
-        path1 (List[int]): path1
-        path2 (List[int]): path2
-        edge_lengths (Dict[int, float]): a dictionary that maps edge ids to their lengths.
-
-    Returns:
-        int: _description_
-    """
-
-    s1 = set(path1)
-    s2 = set(path2)
-    intersection = s1.intersection(s2)
-    union = s1.union(s2)
-
-    intersection_length = sum(edge_lengths.get(e, 0) for e in intersection)
-    union_length = sum(edge_lengths.get(e, 0) for e in union)
-
-    if union_length == 0:
-        return 0.0
-
-    similarity = intersection_length / union_length
-
-    return similarity
-
-
-def filter_dataset(
-    dataset: List[Dict[str, List[int]]],
-    edge_lengths: Dict[int, float],
-    edge_id_to_edge_name: Dict[int, str],
-    diversity_threshold: float = 0.6,
-    min_path_length: int = 3,
-) -> List[Dict[str, List[int]]]:
-    """Only keep paths that are relatively diverse and long enough
-
-    Args:
-        dataset (List[Dict[str, List[int]]]): dataset to be filtered.
-        edge_lengths (Dict[int, float]): a dictionary that maps edge ids to their lengths.
-        edge_id_to_edge_name (Dict[int, str]): a dictionary that maps edge ids to their corresponding edge names.
-        diversity_threshold (int) : Determine the similarity between two paths.
-        path_length (int) : Minimum length for a path to be considered.
-
-    Returns:
-        List[Dict[str, List[int]]]: _description_
-    """
-    filtered_dataset = []
-    for path_collection in tqdm(dataset, dynamic_ncols=True):
-        custom_path = path_collection["custom_path_edges"]
-        original_path = path_collection["original_path_edges"]
-        fastest_path = path_collection["fastest_path_edges"]
-        shortest_path = path_collection["shortest_path_edges"]
-
-        # fmt: off
-        similarity = compute_jaccard_similarity(custom_path, original_path, edge_lengths)
-        if similarity > diversity_threshold:
-            continue
-
-        similarity = compute_jaccard_similarity(custom_path, fastest_path, edge_lengths)
-        if similarity > diversity_threshold:
-            continue
-
-        similarity = compute_jaccard_similarity(custom_path, shortest_path, edge_lengths)
-        if similarity > diversity_threshold:
-            continue
-
-
-        original_path_with_edges_names  = get_path_with_edges_names(original_path, edge_id_to_edge_name)
-        fastest_path_with_edges_names   = get_path_with_edges_names(fastest_path, edge_id_to_edge_name)
-        shortest_path_with_edges_names  = get_path_with_edges_names(shortest_path, edge_id_to_edge_name)
-        custom_path_with_edges_names    = get_path_with_edges_names(custom_path, edge_id_to_edge_name)
-
-        # fmt: on
-        if any(
-            "Unnamed Road" in path
-            for path in [
-                original_path_with_edges_names,
-                fastest_path_with_edges_names,
-                shortest_path_with_edges_names,
-                custom_path_with_edges_names,
-            ]
-        ):
-            continue
-
-        if any(
-            len(path) < min_path_length
-            for path in [
-                original_path_with_edges_names,
-                fastest_path_with_edges_names,
-                shortest_path_with_edges_names,
-                custom_path_with_edges_names,
-            ]
-        ):
-            continue
-
-        path_collection["original_path_edges_names"] = original_path_with_edges_names
-        path_collection["fastest_path_edges_names"] = fastest_path_with_edges_names
-        path_collection["shortest_path_edges_names"] = shortest_path_with_edges_names
-        path_collection["custom_path_edges_names"] = custom_path_with_edges_names
-
-        filtered_dataset.append(path_collection)
-
-    return filtered_dataset
 
 
 def sanity_check(
@@ -740,10 +547,6 @@ if __name__ == "__main__":
     uvk_to_edge_id = {(row.u, row.v, row.key): i for i, row in edges_df.iterrows()}
     edge_id_to_edge_length = {i: (row.length) for i, row in edges_df.iterrows()}
 
-    edge_id_to_edge_name = {
-        i: row.get("name", "Unnamed Road") for i, row in edges_df.iterrows()
-    }
-
     # Load data
     try:
         train_data = load_data(fname=variables.TRAIN_TRIP_DATA_PICKLED_WITH_TIMESTAMPS)
@@ -752,7 +555,8 @@ if __name__ == "__main__":
         cprint(f"FATAL: Could not load data: {e}", "red")
         exit(1)
 
-    n_cores = os.cpu_count()
+    # n_cores = os.cpu_count()
+    n_cores = 12
     custom_path_type = variables.path_type
 
     # ===== TRAIN DATA =====
@@ -767,19 +571,7 @@ if __name__ == "__main__":
         n_cores=n_cores,
     )
 
-    filtered_train_data = filter_dataset(
-        augmented_train_data, edge_id_to_edge_length, edge_id_to_edge_name
-    )
-
-    save_file("train_data", file=filtered_train_data)
-
-    cprint(
-        f"Filtered train data: {len(augmented_train_data)} → {len(filtered_train_data)}",
-        "cyan",
-    )
-
-    if len(filtered_train_data) == 0:
-        cprint("WARNING: Train dataset is empty after filtering!", "red")
+    save_file(f"train_data/{custom_path_type}", file=augmented_train_data)
 
     # ===== TEST DATA =====
     cprint("\n" + "=" * 50, "light_yellow")
@@ -793,19 +585,7 @@ if __name__ == "__main__":
         n_cores=n_cores,
     )
 
-    filtered_test_data = filter_dataset(
-        augmented_test_data, edge_id_to_edge_length, edge_id_to_edge_name
-    )
-
-    cprint(
-        f"Filtered train data: {len(augmented_test_data)} → {len(filtered_test_data)}",
-        "cyan",
-    )
-
-    if len(filtered_test_data) == 0:
-        cprint("WARNING: Train dataset is empty after filtering!", "red")
-
-    save_file("test_data", file=filtered_test_data)
+    save_file(f"test_data/{custom_path_type}", file=augmented_test_data)
 
     cprint("\n" + "=" * 50, "light_green", attrs=["bold"])
     cprint("DATASET GENERATION COMPLETE!", "light_green", attrs=["bold"])
