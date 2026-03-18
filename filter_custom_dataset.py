@@ -2,12 +2,56 @@ import re
 import ast
 import pickle
 import variables
+import numpy as np
 import geopandas as gpd
+import matplotlib.pyplot as plt
 from itertools import groupby
 from tqdm import tqdm
 from termcolor import cprint
-from typing import List, Dict
+from typing import List, Dict, Tuple
 from generate_custom_dataset import save_file
+
+
+def calculate_dynamic_threshold(
+    dataset: List[Dict[str, List[int]]],
+    edge_lengths: Dict[int, float],
+    discard_percentile: float = 90.0,
+) -> Tuple[float, List[float]]:
+    """
+    Calculates the similarity threshold based on the distribution of the dataset.
+    Finds the max similarity of the custom path to any baseline for each sample,
+    and returns the value at the specified percentile.
+    """
+    max_similarities = []
+
+    for path_collection in tqdm(
+        dataset,
+        total=len(dataset),
+        desc="Calculating similarity distribution",
+        dynamic_ncols=True,
+    ):
+        custom_path = path_collection[f"{variables.path_type}_path_edges"]
+        historical_path = path_collection["historical_path_edges"]
+        fastest_path = path_collection["fastest_path_edges"]
+        shortest_path = path_collection["shortest_path_edges"]
+
+        sim_original = compute_jaccard_similarity(
+            custom_path, historical_path, edge_lengths
+        )
+        sim_fastest = compute_jaccard_similarity(
+            custom_path, fastest_path, edge_lengths
+        )
+        sim_shortest = compute_jaccard_similarity(
+            custom_path, shortest_path, edge_lengths
+        )
+
+        # We care about the maximum similarity to ANY of the baselines
+        max_sim = max(sim_original, sim_fastest, sim_shortest)
+        max_similarities.append(max_sim)
+
+    # Calculate the threshold
+    threshold = float(np.percentile(max_similarities, discard_percentile))
+    return threshold, max_similarities
 
 
 def compute_jaccard_similarity(
@@ -161,25 +205,29 @@ def filter_dataset(
     Returns:
         List[Dict[str, List[int]]]: _description_
     """
-    cprint("\nFiltering data...", "light_yellow")
+    cprint(
+        f"\nFiltering data with threshold: {diversity_threshold:.4f}...", "light_yellow"
+    )
     filtered_dataset = []
-    for path_collection in tqdm(dataset, dynamic_ncols=True):
-        custom_path = path_collection["custom_path_edges"]
-        original_path = path_collection["original_path_edges"]
+    for path_collection in tqdm(
+        dataset, total=len(dataset), desc="Filtering dataset", dynamic_ncols=True
+    ):
+        custom_path = path_collection[f"{variables.path_type}_path_edges"]
+        historical_path = path_collection["historical_path_edges"]
         fastest_path = path_collection["fastest_path_edges"]
         shortest_path = path_collection["shortest_path_edges"]
 
         # fmt: off
 
         # 1. Skip if the custom route is virtually identical to ALL baselines
-        sim_original = compute_jaccard_similarity(custom_path, original_path, edge_lengths)
-        sim_fastest = compute_jaccard_similarity(custom_path, fastest_path, edge_lengths)
-        sim_shortest = compute_jaccard_similarity(custom_path, shortest_path, edge_lengths)
+        # sim_historical = compute_jaccard_similarity(custom_path, historical_path, edge_lengths)
+        # sim_fastest = compute_jaccard_similarity(custom_path, fastest_path, edge_lengths)
+        # sim_shortest = compute_jaccard_similarity(custom_path, shortest_path, edge_lengths)
 
-        if sim_original > diversity_threshold and sim_fastest > diversity_threshold and sim_shortest > diversity_threshold:
-            continue 
+        # if max(sim_historical, sim_fastest, sim_shortest) > diversity_threshold:
+        #     continue 
 
-        original_path_with_edges_names  = get_path_with_edges_names(original_path, edge_id_to_edge_name)
+        historical_path_with_edges_names  = get_path_with_edges_names(historical_path, edge_id_to_edge_name)
         fastest_path_with_edges_names   = get_path_with_edges_names(fastest_path, edge_id_to_edge_name)
         shortest_path_with_edges_names  = get_path_with_edges_names(shortest_path, edge_id_to_edge_name)
         custom_path_with_edges_names    = get_path_with_edges_names(custom_path, edge_id_to_edge_name)
@@ -188,7 +236,7 @@ def filter_dataset(
         if any(
             "Unnamed Road" in path
             for path in [
-                original_path_with_edges_names,
+                historical_path_with_edges_names,
                 fastest_path_with_edges_names,
                 shortest_path_with_edges_names,
                 custom_path_with_edges_names,
@@ -199,7 +247,7 @@ def filter_dataset(
         if any(
             len(path) < min_path_length
             for path in [
-                original_path_with_edges_names,
+                historical_path_with_edges_names,
                 fastest_path_with_edges_names,
                 shortest_path_with_edges_names,
                 custom_path_with_edges_names,
@@ -207,7 +255,9 @@ def filter_dataset(
         ):
             continue
 
-        path_collection["original_path_edges_names"] = original_path_with_edges_names
+        path_collection["historical_path_edges_names"] = (
+            historical_path_with_edges_names
+        )
         path_collection["fastest_path_edges_names"] = fastest_path_with_edges_names
         path_collection["shortest_path_edges_names"] = shortest_path_with_edges_names
         path_collection[f"{custom_path_type}_path_edges_names"] = (
@@ -220,18 +270,23 @@ def filter_dataset(
 
 
 if __name__ == "__main__":
-    custom_path_type = variables.variables.path_type
+    custom_path_type = variables.path_type
 
     edges_df = gpd.read_file(variables.EDGE_DATA)
 
     edge_id_to_edge_length = {i: (row.length) for i, row in edges_df.iterrows()}
 
-    edge_id_to_edge_name = {
-        i: row.get("name", "Unnamed Road") for i, row in edges_df.iterrows()
-    }
+    # fmt: off
+    edge_id_to_edge_name = {i: row.get("name", "Unnamed Road") for i, row in edges_df.iterrows()}
 
     # FILTERING METRICS
-    diversity_threshold = 0.6
+    if variables.place_name == "beijing":
+        discard_percentile = 60.0  # For dynamic threshold calculation
+    elif variables.place_name == "chengdu":
+        discard_percentile = 60.0  # For dynamic threshold calculation
+    elif variables.place_name == "harbin":
+        discard_percentile = 60.0  # For dynamic threshold calculation
+        
     min_path_length = 4
 
     # ===== TRAIN DATA =====
@@ -239,62 +294,71 @@ if __name__ == "__main__":
     cprint("PROCESSING TRAINING DATA", "light_yellow", attrs=["bold"])
     cprint("=" * 50, "light_yellow")
 
-    # fmt: off
+    train_data_filename = (f"train_data/{variables.path_type}/{variables.place_name}_data")
+
     try:
-        with open(f"train_data/{variables.path_type}/{variables.place_name}_data", "rb") as f:
+        with open(train_data_filename, "rb") as f:
             augmented_train_data = pickle.load(f)
     except FileNotFoundError:
-        cprint(
-            "Train data not found! Please run generate_custom_dataset.py first.", "red"
-        )
+        cprint(f"Train data not found at {train_data_filename}! Please run generate_custom_dataset.py first.", "red")
         exit(1)
 
+    cprint(f"Loaded {len(augmented_train_data)} training samples.", "cyan")
+
+    # 1. Calculate the dynamic threshold from the TRAIN data distribution
+    dynamic_threshold, max_similarities = calculate_dynamic_threshold(
+        augmented_train_data, 
+        edge_id_to_edge_length, 
+        discard_percentile=discard_percentile
+    )
+
+
+    # 2. Filter train data with dynamic threshold
     filtered_train_data = filter_dataset(
         augmented_train_data,
         edge_id_to_edge_length,
         edge_id_to_edge_name,
-        diversity_threshold=diversity_threshold,
+        diversity_threshold=dynamic_threshold,  # Use the dynamically calculated threshold
         min_path_length=min_path_length,
     )
 
-    cprint(
-        f"Filtered train data: {len(augmented_train_data)} → {len(filtered_train_data)}",
-        "cyan",
-    )
+    cprint(f"Filtered train data: {len(augmented_train_data)} → {len(filtered_train_data)}","cyan",)
 
     if len(filtered_train_data) == 0:
         cprint("WARNING: Train dataset is empty after filtering!", "red")
 
-    save_file("train_data", file=filtered_train_data)
+    filtered_train_data_save_path = f"filtered_train_data/{variables.path_type}"
+    save_file(filtered_train_data_save_path, file=filtered_train_data)
 
-    # ===== TEST DATA =====
+    # # ===== TEST DATA =====
     cprint("\n" + "=" * 50, "light_yellow")
     cprint("PROCESSING TEST DATA", "light_yellow", attrs=["bold"])
     cprint("=" * 50, "light_yellow")
 
+    test_data_filename = f"test_data/{variables.path_type}/{variables.place_name}_data"
+
     try:
-        with open(f"test_data/{variables.path_type}/{variables.place_name}", "rb") as f:
+        with open(test_data_filename, "rb") as f:
             augmented_test_data = pickle.load(f)
     except FileNotFoundError:
-        cprint(
-            "Test data not found! Please run generate_custom_dataset.py first.", "red"
-        )
+        cprint(f"Test data not found at {test_data_filename}! Please run generate_custom_dataset.py first.", "red")
         exit(1)
 
+    cprint(f"Loaded {len(augmented_test_data)} test samples from.", "cyan")
+
+    # 3. Filter test data with dynamic threshold
     filtered_test_data = filter_dataset(
         augmented_test_data,
         edge_id_to_edge_length,
         edge_id_to_edge_name,
-        diversity_threshold=diversity_threshold,
+        diversity_threshold=dynamic_threshold,  # Use the same threshold calculated from the train data
         min_path_length=min_path_length,
     )
 
-    cprint(
-        f"Filtered test data: {len(augmented_test_data)} → {len(filtered_test_data)}",
-        "cyan",
-    )
+    cprint(f"Filtered test data: {len(augmented_test_data)} → {len(filtered_test_data)}","cyan")
 
     if len(filtered_test_data) == 0:
         cprint("WARNING: Train dataset is empty after filtering!", "red")
 
-    save_file("test_data", file=filtered_test_data)
+    filtered_test_data_save_path = f"filtered_test_data/{variables.path_type}"
+    save_file(filtered_test_data_save_path, file=filtered_test_data)

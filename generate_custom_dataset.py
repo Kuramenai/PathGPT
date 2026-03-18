@@ -1,10 +1,13 @@
 # %%
+import os
+import sys
 import pickle
 import random
 import osmnx as ox
 import networkx as nx
 import concurrent.futures
 import variables
+import pandas as pd
 import geopandas as gpd
 import numpy as np
 from functools import partial
@@ -19,8 +22,8 @@ GRAPH = None
 
 def welcome_text():
     cprint("\n\nGENERATING DATASET FOR :", "light_yellow", attrs=["bold"])
-    cprint(f"-PLACE NAME : {variables.place_name}", "green")
-    cprint(f"-USING CUSTOM PATH: {variables.path_type}", "green")
+    cprint(f"-PLACE NAME : {variables.place_name.capitalize()}", "cyan")
+    cprint(f"-USING CUSTOM PATH: {variables.path_type}", "cyan")
     # cprint(f"-USE FOR : {variables.dataset_usage}", "green")
 
 
@@ -141,36 +144,39 @@ def load_graph(fname: str) -> nx.MultiDiGraph:
 
     edges["highway"] = edges["highway"].apply(lambda x: x[0] if isinstance(x, list) else x)
 
-    # mean_travel_times = (edges.groupby("highway")["travel_time"].mean().round(3).to_dict())
-    # overall_mean = edges["travel_time"].mean()
-
     default_speed = 40.0  # Default speed in kph if highway type is missing
-    speed_lookup = (edges.groupby("highway")["speed_kph"].mean().round(3).to_dict())
+    speed_lookup = (edges.groupby("highway")["speed_kph"].mean().to_dict())
 
     edges_with_missing_travel_values = 0
     for u, v, k, data in graph.edges(keys=True, data=True):
-        # Here we divide the length of each edge by 1000 just to maintain consistency with NeuroMLR (although I am not sure why they did that)
-        # data["length"] = data["length"] / 1000
         
-        # The travel times are missing for some edges (equals to 0),
-        # in that case we replace it with the mean value of the travel times of all edges of the same type
-        if data["travel_time"] == 0:
-            edges_with_missing_travel_values += 1
-            
-            # data["travel_time"] = mean_travel_times.get(data["highway"], overall_mean).round(1)
-            
-            highway = data["highway"]
+        speed_kph = data.get("speed_kph", default_speed)
+        
+        # The speeds values might be missing for some edges
+        if pd.isna(speed_kph) or speed_kph == 0: 
+            highway = data.get("highway", "unclassified")
             if isinstance(highway, list):
                 highway = highway[0]
                 
-            speed_kmh = speed_lookup.get(highway, default_speed)
-            speed_ms = speed_kmh / 3.6  # Convert km/h to m/s
+            # Grab the fallback speed
+            speed_kph = speed_lookup.get(highway, default_speed)
+            data["speed_kph"] = float(speed_kph) 
+        
+        # The travel times are missing for some edges (equals to 0),
+        # in that case we replace it with the mean value of the travel times of all edges of the same type
+        travel_time = data.get("travel_time", 0)
+        if pd.isna(travel_time) or travel_time == 0:
+            edges_with_missing_travel_values += 1
             
-            travel_time = data["length"] / speed_ms
-            data["travel_time"] = round(travel_time, 3)
+            speed_ms = float(speed_kph) / 3.6  # Convert km/h to m/s
+            
+            length_m = data.get("length", 100.0) 
+            data["travel_time"] = length_m / speed_ms
         
         data["travel_time"] *= np.random.uniform(0.999, 1.001)
+        
         data["fuel_cost"] = calculate_edge_fuel_efficiency_weight(u, v, data)
+        data["fuel_cost"] *= np.random.uniform(0.999, 1.001)
 
     cprint(f"The number of edges with missing travel times found is {edges_with_missing_travel_values}")
 
@@ -246,7 +252,8 @@ def calculate_edge_fuel_efficiency_weight(u: int, v: int, data) -> int:
     """
 
     # Retrieves length
-    length_km = data.get("length", 0.1)
+    length_m = data.get("length", 100.0)
+    length_km = length_m / 1000.0
 
     # Retreives speed (kph)
     # Defaults to 50 km/h if missing
@@ -264,11 +271,11 @@ def calculate_edge_fuel_efficiency_weight(u: int, v: int, data) -> int:
     elif speed_kph < 50:
         speed_factor = 1.1
     elif speed_kph < 70:
-        speed_factor = 1.0  # The peak efficiency sweet spot (~30-45 mph)
+        speed_factor = 1.0  # The peak efficiency for ICE
     elif speed_kph < 90:
         speed_factor = 1.1
     else:
-        speed_factor = 1.3
+        speed_factor = 1.25
 
     # --- edge type ---
     highway = data.get("highway", [])
@@ -281,24 +288,16 @@ def calculate_edge_fuel_efficiency_weight(u: int, v: int, data) -> int:
     stop_penalty_seconds = 0.0
 
     if any(h in {"motorway", "motorway_link"} for h in highway):
-        highway_penalty = 1.3
         stop_penalty_seconds = 0
 
     elif any(h in {"trunk", "trunk_link"} for h in highway):
-        highway_penalty = 1.15
-        stop_penalty_seconds = (
-            5  # ~5 seconds equivalent fuel waste for slight traffic/merging
-        )
+        stop_penalty_seconds = 5
 
     elif any(h in {"primary", "secondary"} for h in highway):
-        stop_penalty_seconds = (
-            15  # ~15 seconds equivalent fuel waste for traffic lights
-        )
+        stop_penalty_seconds = 15
 
     elif any(h in {"residential", "living_street"} for h in highway):
-        stop_penalty_seconds = (
-            30  # ~30 seconds equivalent fuel waste for stop signs & pedestrians
-        )
+        stop_penalty_seconds = 30
 
     # Calculate final eco-cost
     cost = ((time_seconds * speed_factor) + stop_penalty_seconds) * highway_penalty
@@ -338,7 +337,7 @@ def compute_paths(
         custom_weight (str): custom_weight.
 
     Returns:
-        Tuple[List[int], List[int], List[int]]: The original path, The newly computed fastest path, The newly computed shortest path.
+        Tuple[List[int], List[int], List[int]]: The historical path, The newly computed fastest path, The newly computed shortest path.
     """
     global GRAPH
     graph = GRAPH
@@ -365,7 +364,7 @@ def augment_data(
     n_cores: int = 12,
 ) -> List[Dict[str, List[int]]]:
     """
-    Generate new dataset containing the original paths and the newly computed fastest, shortest and new custom paths.
+    Generate new dataset containing the historical paths and the newly computed fastest, shortest and new custom paths.
 
     Args:
         data (List[Tuple[int, List[int], int]]): A list of historical trajectories where each trajectory is expressed in the format of the following tuple (idx, path, timestamps).
@@ -422,7 +421,7 @@ def augment_data(
         path_collection["idx"] = data_copy[path_index][0]
         path_collection["timestamps"] = data_copy[path_index][-1]
 
-        path_collection["original_path_edges"] = data_copy[path_index][1]
+        path_collection["historical_path_edges"] = data_copy[path_index][1]
         path_collection["fastest_path_edges"] = remap_to_edges(fastest_path, graph, weight_metric="travel_time")
         path_collection["shortest_path_edges"] = remap_to_edges(shortest_path, graph, weight_metric="length")
         path_collection[f"{custom_path_type}_path_edges"] = remap_to_edges(custom_path, graph, weight_metric=custom_weight_key)
@@ -442,7 +441,7 @@ def sanity_check(
     Sanity check that the street names of the paths generated from the node ids are the same as the ones extracted from the edges ids.
 
     Args:
-        neuromlr_paths (List[Tuple[int, List[int], Tuple[int, int]]]): historical trajectories extracted from the original dataset.
+        neuromlr_paths (List[Tuple[int, List[int], Tuple[int, int]]]): historical trajectories extracted from the historical dataset.
         pathgpt_paths (Dict[str, List[int]]): new paths computed from the source and destination information provided from the historical trajectories.
 
     Returns:
@@ -452,7 +451,7 @@ def sanity_check(
     dissimilarities = 0
     for original_path, path_collection in zip(neuromlr_paths, pathgpt_paths):
         original_edges = original_path[1]
-        generated_path = path_collection["original_path_edges"]
+        generated_path = path_collection["historical_path_edges"]
         if generated_path != original_edges:
             dissimilarities += 1
 
@@ -555,8 +554,9 @@ if __name__ == "__main__":
         cprint(f"FATAL: Could not load data: {e}", "red")
         exit(1)
 
+    # Set this value according to your system configuration! In our case setting it to to high caused freezing, so beware.
     # n_cores = os.cpu_count()
-    n_cores = 12
+    n_cores = 8
     custom_path_type = variables.path_type
 
     # ===== TRAIN DATA =====
