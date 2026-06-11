@@ -1,7 +1,7 @@
 import sys
 from utils import get_args
 
-# sys.argv = [""]
+sys.argv = [""]
 args = get_args()
 place_name = args.place_name
 # dataset_usage = args.dataset_usage
