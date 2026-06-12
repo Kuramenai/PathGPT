@@ -53,16 +53,12 @@ if __name__ == "__main__":
     responses = llm.generate(formatted_messages, sampling_params)
 
     results = []
-    i = 0
     for output in responses:
-        # i += 1
         # output is a RequestOutput object
         generated_text = output.outputs[0].text.strip()
 
         results.append(generated_text)
         print(f"Generated text: {generated_text}")
-        # if i == 5:
-        #     break
 
     file_path = f"generated_paths/{variables.path_type}/"
     if variables.use_context:

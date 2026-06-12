@@ -6,9 +6,19 @@ import numpy as np
 import pandas as pd
 import geopandas as gpd
 from collections import defaultdict
-from typing import Dict, Set
+from typing import Any, Dict, List, Set
 from termcolor import cprint
 from filter_custom_dataset import clean_street_name
+
+
+def extract_json_object(raw_text: str) -> dict:
+    try:
+        match = re.search(r"\{.*\}", raw_text, re.DOTALL)
+        if match:
+            return json.loads(match.group(0))
+    except json.JSONDecodeError:
+        pass
+    return {}
 
 
 def extract_json_route(raw_text: str) -> list:
@@ -16,30 +26,42 @@ def extract_json_route(raw_text: str) -> list:
     Uses regex to safely find and parse the JSON block,
     and unrolls compressed road segments.
     """
-    try:
-        # Look for everything between the first { and the last }
-        match = re.search(r"\{.*\}", raw_text, re.DOTALL)
-        if match:
-            json_str = match.group(0)
-            parsed_dict = json.loads(json_str)
-            raw_route = parsed_dict.get("route", [])
+    raw_route = extract_json_object(raw_text).get("route", [])
+    if not isinstance(raw_route, list):
+        return []
 
-            # --- UNROLLING STEP ---
-            flattened_route = []
-            for item in raw_route:
-                # Split the bundled string by "-" and clean up whitespace
-                sub_roads = [road.strip() for road in item.split("-")]
-                flattened_route.extend(sub_roads)
+    flattened_route = []
+    for item in raw_route:
+        sub_roads = [road.strip() for road in str(item).split("-")]
+        flattened_route.extend(sub_roads)
 
-            # Clean up any empty strings or the "未知道路" (Unknown Road) fallbacks
-            clean_route = [r for r in flattened_route if r and r != "未知道路"]
+    return [r for r in flattened_route if r and r != "未知道路"]
 
-            return clean_route
 
-    except json.JSONDecodeError:
-        pass  # Fall through to return empty list if parsing fails
+def extract_json_segments(raw_text: str) -> List[str]:
+    raw_segments = extract_json_object(raw_text).get("route_segments", [])
+    if not isinstance(raw_segments, list):
+        return []
+    return [str(segment_id).strip() for segment_id in raw_segments if str(segment_id).strip()]
 
-    return []
+
+def decode_segment_route(segment_route: List[str], id_to_edges: Dict[str, List[int]]) -> List[int]:
+    edge_route = []
+    for segment_id in segment_route:
+        for edge_id in id_to_edges.get(segment_id, []):
+            edge_id = int(edge_id)
+            if not edge_route or edge_route[-1] != edge_id:
+                edge_route.append(edge_id)
+    return edge_route
+
+
+def edge_ids_to_road_names(edge_route: List[int], edge_id_to_name: Dict[int, str]) -> List[str]:
+    road_names = []
+    for edge_id in edge_route:
+        road_name = edge_id_to_name.get(edge_id, "未知道路")
+        if road_name != "未知道路" and (not road_names or road_names[-1] != road_name):
+            road_names.append(road_name)
+    return road_names
 
 
 def calculate_metrics(generated_route: list, ground_truth_route: list) -> tuple[float, float]:
@@ -135,6 +157,33 @@ def check_route_connectivity(generated_route: list, name_adjacency_graph: dict) 
     return True
 
 
+def build_edge_id_to_uvk(edges_df: pd.DataFrame) -> Dict[int, tuple]:
+    return {int(i): (row.u, row.v, row.key) for i, row in edges_df.iterrows()}
+
+
+def check_edge_connectivity(edge_route: List[int], edge_id_to_uvk: Dict[int, tuple]) -> bool:
+    # ponytail: endpoint-sharing check; upgrade to directed graph validation if one-way legality matters.
+    if len(edge_route) <= 1:
+        return True
+
+    for prev_edge, next_edge in zip(edge_route, edge_route[1:]):
+        prev_uvk = edge_id_to_uvk.get(int(prev_edge))
+        next_uvk = edge_id_to_uvk.get(int(next_edge))
+        if not prev_uvk or not next_uvk:
+            return False
+        if not ({prev_uvk[0], prev_uvk[1]} & {next_uvk[0], next_uvk[1]}):
+            return False
+    return True
+
+
+def build_edge_id_to_name(edges_df: pd.DataFrame) -> Dict[int, str]:
+    edge_id_to_name = {}
+    for edge_id, row in edges_df.iterrows():
+        road_name = clean_street_name(row.get("name", "Unnamed Road"))
+        edge_id_to_name[int(edge_id)] = "未知道路" if road_name == "Unnamed Road" else road_name
+    return edge_id_to_name
+
+
 if __name__ == "__main__":
     cprint("\n--- STARTING EVALUATION ---", "yellow", attrs=["bold"])
 
@@ -157,59 +206,89 @@ if __name__ == "__main__":
         cprint(f"Error loading files: {e}", "red")
         exit(1)
 
+    cprint("\nLoading edge data...", "yellow")
+    edges_df = gpd.read_file(variables.EDGE_DATA)
+    edge_id_to_name = build_edge_id_to_name(edges_df)
+    edge_id_to_uvk = build_edge_id_to_uvk(edges_df)
+
+    id_to_edges = {}
+    if variables.use_context:
+        registry_filename = (
+            f"symbolic_subgraphs/{variables.path_type}/{variables.place_name}_segment_registry"
+        )
+        try:
+            with open(registry_filename, "rb") as f:
+                segment_registry = pickle.load(f)
+            id_to_edges = segment_registry.get("id_to_edges", {})
+        except FileNotFoundError:
+            cprint(
+                f"Segment registry not found at {registry_filename}. Please run subgraph_construction.py first.",
+                "red",
+            )
+            exit(1)
+    else:
+        name_adjacency_graph = build_name_adjacency_graph(edges_df)
+
     all_precisions = []
     all_recalls = []
+    all_road_precisions = []
+    all_road_recalls = []
     valid_routes_count = 0
+    topologically_valid_count = 0
 
-    # 2. Process each output
+    cprint("Evaluating generated routes...", "yellow")
     for i in range(len(raw_llm_outputs)):
         raw_text = raw_llm_outputs[i]
+        path_collection = ground_truth_data[i]
 
-        # Extract the ground truth for this specific task
-        gt_key = f"{variables.path_type}_path_edges_names"
-        ground_truth_route = ground_truth_data[i][gt_key]
+        if variables.use_context:
+            segment_route = extract_json_segments(raw_text)
+            predicted_edges = decode_segment_route(segment_route, id_to_edges)
+            predicted_route = edge_ids_to_road_names(predicted_edges, edge_id_to_name)
 
-        # Parse the LLM's JSON prediction
-        predicted_route = extract_json_route(raw_text)
+            ground_truth_edges = path_collection.get(f"{variables.path_type}_path_edges", [])
+            ground_truth_route = path_collection.get(f"{variables.path_type}_path_edges_names", [])
 
-        if predicted_route:
-            valid_routes_count += 1
+            if predicted_edges:
+                valid_routes_count += 1
+                if check_edge_connectivity(predicted_edges, edge_id_to_uvk):
+                    topologically_valid_count += 1
 
-        # Calculate scores
-        p, r = calculate_metrics(predicted_route, ground_truth_route)
+            if ground_truth_edges:
+                p, r = calculate_metrics(predicted_edges, ground_truth_edges)
+            else:
+                p, r = calculate_metrics(predicted_route, ground_truth_route)
+
+            road_p, road_r = calculate_metrics(predicted_route, ground_truth_route)
+            all_road_precisions.append(road_p)
+            all_road_recalls.append(road_r)
+        else:
+            ground_truth_route = path_collection[f"{variables.path_type}_path_edges_names"]
+            predicted_route = extract_json_route(raw_text)
+
+            if predicted_route:
+                valid_routes_count += 1
+                if check_route_connectivity(predicted_route, name_adjacency_graph):
+                    topologically_valid_count += 1
+
+            p, r = calculate_metrics(predicted_route, ground_truth_route)
+
         all_precisions.append(p)
         all_recalls.append(r)
 
-    # 3. Aggregate and display results for the paper
     avg_precision = np.mean(all_precisions) * 100
     avg_recall = np.mean(all_recalls) * 100
     success_rate = (valid_routes_count / len(raw_llm_outputs)) * 100
-
-    cprint("\nBuilding Topological Adjacency Graph...", "yellow")
-    # Load OSM edges dataframe (make sure not to reset the index!)
-    edges_df = gpd.read_file(variables.EDGE_DATA)
-    name_adjacency_graph = build_name_adjacency_graph(edges_df)
-
-    cprint("Evaluating generated routes...", "yellow")
-
-    # Track the new metric
-    topologically_valid_count = 0
-
-    for i in range(len(raw_llm_outputs)):
-        predicted_route = extract_json_route(raw_llm_outputs[i])
-
-        if predicted_route:
-            valid_routes_count += 1
-
-            # --- THE NEW CHECK ---
-            is_drivable = check_route_connectivity(predicted_route, name_adjacency_graph)
-            if is_drivable:
-                topologically_valid_count += 1
+    topology_rate = (topologically_valid_count / len(raw_llm_outputs)) * 100
 
     cprint(f"\nResults for {variables.place_name} ({variables.path_type}):", "green", attrs=["bold"])
     print(f"Total Samples Tested: {len(raw_llm_outputs)}")
     print(f"Valid JSON Routes Generated: {success_rate:.2f}%")
     print("-" * 30)
-    cprint(f"Average Precision: {avg_precision:.2f}%", "cyan")
-    cprint(f"Average Recall:    {avg_recall:.2f}%", "cyan")
-    cprint(f"Average Topologically Valid Count:    {topologically_valid_count:.2f}%", "cyan")
+    metric_prefix = "Average Edge" if variables.use_context else "Average Road"
+    cprint(f"{metric_prefix} Precision: {avg_precision:.2f}%", "cyan")
+    cprint(f"{metric_prefix} Recall:    {avg_recall:.2f}%", "cyan")
+    if variables.use_context and all_road_precisions:
+        cprint(f"Average Road Precision: {np.mean(all_road_precisions) * 100:.2f}%", "cyan")
+        cprint(f"Average Road Recall:    {np.mean(all_road_recalls) * 100:.2f}%", "cyan")
+    cprint(f"Topologically Valid Routes: {topology_rate:.2f}%", "cyan")

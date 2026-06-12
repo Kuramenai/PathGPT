@@ -5,13 +5,17 @@ import networkx as nx
 import geopandas as gpd
 from termcolor import cprint
 from tqdm import tqdm
-from collections import defaultdict
+from collections import defaultdict, deque
 from generate_custom_dataset import edge_id_to_node_id
 import generate_custom_dataset as gcd
 from typing import List, Dict, Any, Set, Tuple
 from generate_custom_dataset import load_graph, remap_to_edges
-
+from filter_custom_dataset import clean_street_name
+import osmnx as ox
 from itertools import islice
+
+Segment = Tuple[int, ...]
+CompressedSubgraph = Dict[Segment, Set[Segment]]
 
 
 def _get_od_nodes(
@@ -58,25 +62,29 @@ def construct_local_subgraphs(
         start_edge, destination_edge = historical_path[0], historical_path[-1]
         od_pair = (start_edge, destination_edge)
 
-        if od_pair not in od_pair_k_shortest_map:
-            try:
-                start_node, destination_node = _get_od_nodes(historical_path, edge_id_to_uvk)
-                top_k_shortest_nodes_paths = nx.shortest_simple_paths(
-                    graph, start_node, destination_node, weight="length"
-                )
-                top_k_shortest_edges_paths = [
-                    remap_to_edges(p, graph, "length") for p in islice(top_k_shortest_nodes_paths, top_k)
-                ]
-            except (nx.NetworkXNoPath, nx.NodeNotFound, ValueError):
-                top_k_shortest_edges_paths = []
-            od_pair_k_shortest_map[od_pair] = top_k_shortest_edges_paths
+        # if od_pair not in od_pair_k_shortest_map:
+        #     try:
+        #         start_node, destination_node = _get_od_nodes(historical_path, edge_id_to_uvk)
+        #         top_k_shortest_nodes_paths = nx.shortest_simple_paths(
+        #             graph, start_node, destination_node, weight="length"
+        #         )
+        #         top_k_shortest_edges_paths = [
+        #             remap_to_edges(p, graph, "length") for p in islice(top_k_shortest_nodes_paths, top_k)
+        #         ]
+        #     except (nx.NetworkXNoPath, nx.NodeNotFound, ValueError):
+        #         top_k_shortest_edges_paths = []
+        #     od_pair_k_shortest_map[od_pair] = top_k_shortest_edges_paths
 
-        top_k_shortest = od_pair_k_shortest_map[od_pair]
+        # top_k_shortest = od_pair_k_shortest_map[od_pair]
 
         # Merge all edges from all paths into the subgraph
-        for path in [historical_path, fastest_path, shortest_path, *top_k_shortest]:
+        # for path in [historical_path, fastest_path, shortest_path, *top_k_shortest]:
+        for path in [historical_path, fastest_path, shortest_path]:
             if not path:
                 continue  # Skip empty paths
+            if len(path) == 1:
+                subgraphs[od_pair].setdefault(path[0], set())
+                continue
 
             for i in range(len(path) - 1):
                 u = path[i]  # Current edge ID
@@ -89,9 +97,7 @@ def construct_local_subgraphs(
     return dict(subgraphs)
 
 
-def compress_edge_subgraph(
-    subgraph: Dict[int, Set[int]], start_edge: int
-) -> Dict[Tuple[int, ...], Set[Tuple[int, ...]]]:
+def compress_edge_subgraph(subgraph: Dict[int, Set[int]], start_edge: int) -> CompressedSubgraph:
     """
     Compresses an edge-based subgraph by merging linear edge sequences.
     """
@@ -146,6 +152,7 @@ def compress_edge_subgraph(
             continue
 
         visited_segments.add(segment)
+        compressed_graph.setdefault(segment, set())
 
         # Look at the last edge in our newly formed segment
         last_edge = segment[-1]
@@ -165,16 +172,267 @@ def compress_edge_subgraph(
     return {k: set(v) for k, v in compressed_graph.items()}
 
 
+def _is_missing(value: Any) -> bool:
+    if value is None:
+        return True
+    try:
+        return bool(value != value)
+    except (TypeError, ValueError):
+        return False
+
+
+def _safe_float(value: Any, default: float = 0.0) -> float:
+    try:
+        if _is_missing(value):
+            return default
+        return float(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def _normalize_attribute_values(value: Any, default: str = "N/A") -> List[str]:
+    if _is_missing(value):
+        return [default]
+    if isinstance(value, (list, tuple, set)):
+        values = value
+    else:
+        values = [value]
+    cleaned_values = [str(v).strip() for v in values if str(v).strip()]
+    return cleaned_values or [default]
+
+
+def build_edge_attribute_dicts(
+    graph: nx.MultiDiGraph,
+    edges_df: gpd.GeoDataFrame,
+    edge_id_to_uvk: Dict[int, Tuple[int, int, int]],
+) -> Dict[str, Dict[int, Any]]:
+    """
+    Collects edge-level attributes used to describe compressed segment tuples.
+    """
+    edge_id_to_name = {}
+    edge_id_to_length = {}
+    edge_id_to_time = {}
+    edge_id_to_type = {}
+
+    for edge_id, row in edges_df.iterrows():
+        edge_id = int(edge_id)
+        uvk = edge_id_to_uvk.get(edge_id)
+        edge_data = {}
+        if uvk:
+            u, v, key = uvk
+            edge_data = graph.get_edge_data(u, v, key, default={}) or {}
+
+        raw_name = row.get("name", edge_data.get("name", "Unnamed Road"))
+        raw_length = row.get("length", edge_data.get("length", 1.0))
+        raw_time = row.get("travel_time", edge_data.get("travel_time", 1.0))
+        raw_type = row.get("Type", row.get("highway", edge_data.get("highway", "N/A")))
+
+        edge_id_to_name[edge_id] = raw_name
+        edge_id_to_length[edge_id] = _safe_float(raw_length)
+        edge_id_to_time[edge_id] = _safe_float(raw_time)
+        edge_id_to_type[edge_id] = raw_type
+
+    return {
+        "edge_id_to_name": edge_id_to_name,
+        "edge_id_to_length": edge_id_to_length,
+        "edge_id_to_time": edge_id_to_time,
+        "edge_id_to_type": edge_id_to_type,
+    }
+
+
+def describe_segment(segment: Segment, edge_dicts: Dict[str, Dict[int, Any]]) -> Dict[str, Any]:
+    """
+    Builds human-readable semantics for one compressed segment tuple.
+    """
+    road_names = []
+    road_types = set()
+    total_length = 0.0
+    total_time = 0.0
+
+    for edge_id in segment:
+        raw_name = edge_dicts["edge_id_to_name"].get(edge_id, "Unnamed Road")
+        road_name = clean_street_name(raw_name)
+        if road_name == "Unnamed Road":
+            road_name = "Unknown Road"
+        if not road_names or road_names[-1] != road_name:
+            road_names.append(road_name)
+
+        total_length += edge_dicts["edge_id_to_length"].get(edge_id, 0.0)
+        total_time += edge_dicts["edge_id_to_time"].get(edge_id, 0.0)
+
+        raw_type = edge_dicts["edge_id_to_type"].get(edge_id, "N/A")
+        road_types.update(_normalize_attribute_values(raw_type))
+
+    display_name = " -> ".join(road_names) if road_names else "Unknown Road"
+    road_types = sorted(road_types)
+
+    return {
+        "edge_count": len(segment),
+        "road_names": road_names,
+        "display_name": display_name,
+        "length_m": round(total_length, 2),
+        "travel_time_s": round(total_time, 2),
+        "road_types": road_types,
+    }
+
+
+def _segment_sort_key(segment: Segment) -> Tuple[int, int, Segment]:
+    first_edge = int(segment[0]) if segment else -1
+    return first_edge, len(segment), segment
+
+
+def iter_compressed_segments(compressed_subgraph: CompressedSubgraph) -> Set[Segment]:
+    all_segments = set(compressed_subgraph)
+    for neighbors in compressed_subgraph.values():
+        all_segments.update(neighbors)
+    return all_segments
+
+
+def build_global_segment_registry(
+    compressed_subgraphs: Dict[Tuple[int, int], CompressedSubgraph],
+    id_prefix: str = "G",
+) -> Dict[str, Any]:
+    """
+    Assigns one deterministic global symbolic ID to each unique compressed edge tuple.
+    """
+    all_segments = set()
+    for compressed_subgraph in compressed_subgraphs.values():
+        all_segments.update(iter_compressed_segments(compressed_subgraph))
+
+    ordered_segments = sorted(all_segments, key=_segment_sort_key)
+    segment_to_id = {segment: f"{id_prefix}{idx}" for idx, segment in enumerate(ordered_segments)}
+    id_to_segment = {segment_id: segment for segment, segment_id in segment_to_id.items()}
+
+    return {
+        "id_prefix": id_prefix,
+        "segment_count": len(ordered_segments),
+        "segment_to_id": segment_to_id,
+        "id_to_segment": id_to_segment,
+        "id_to_edges": {
+            segment_id: [int(edge_id) for edge_id in segment] for segment_id, segment in id_to_segment.items()
+        },
+    }
+
+
+def _order_segments(compressed_subgraph: CompressedSubgraph, start_edge: int) -> List[Segment]:
+    """Orders segments in a compressed subgraph based on their start edge.
+
+    Args:
+        compressed_subgraph (CompressedSubgraph): The compressed subgraph to order.
+        start_edge (int): The start edge of the subgraph.
+
+    Returns:
+        List[Segment]: The ordered segments.
+    """
+    all_segments = iter_compressed_segments(compressed_subgraph)
+
+    start_candidates = [segment for segment in all_segments if segment and segment[0] == start_edge]
+    if start_candidates:
+        start_segment = sorted(start_candidates, key=_segment_sort_key)[0]
+    elif all_segments:
+        start_segment = sorted(all_segments, key=_segment_sort_key)[0]
+    else:
+        return []
+
+    ordered_segments = []
+    visited = set()
+    queue = deque([start_segment])
+
+    while queue:
+        segment = queue.popleft()
+        if segment in visited:
+            continue
+        visited.add(segment)
+        ordered_segments.append(segment)
+
+        for neighbor in sorted(compressed_subgraph.get(segment, set()), key=_segment_sort_key):
+            if neighbor not in visited:
+                queue.append(neighbor)
+
+    for segment in sorted(all_segments - visited, key=_segment_sort_key):
+        ordered_segments.append(segment)
+
+    return ordered_segments
+
+
+def build_symbolic_subgraph(
+    compressed_subgraph: CompressedSubgraph,
+    edge_dicts: Dict[str, Dict[int, Any]],
+    start_edge: int,
+    dest_edge: int,
+    segment_to_id: Dict[Segment, str],
+) -> Dict[str, Any]:
+    """
+    Adds global symbolic IDs and readable semantics to a compressed edge-tuple graph.
+    """
+    ordered_segments = _order_segments(compressed_subgraph, start_edge)
+
+    segments = {}
+    segment_id_adjacency = {}
+
+    for segment in ordered_segments:
+        segment_id = segment_to_id[segment]
+        details = describe_segment(segment, edge_dicts)
+
+        details.update(
+            {
+                "segment_id": segment_id,
+                "local_order": len(segments),
+                "summary": (
+                    f"{segment_id}: {details['display_name']} "
+                    f"type: {'/'.join(details['road_types'])}, "
+                    f"length: {details['length_m']}m, "
+                    f"time: {details['travel_time_s']}s)"
+                ),
+            }
+        )
+        segments[segment_id] = details
+
+        neighbors = sorted(compressed_subgraph.get(segment, set()), key=_segment_sort_key)
+        segment_id_adjacency[segment_id] = [segment_to_id[n] for n in neighbors]
+
+    destination_segment_ids = [segment_to_id[segment] for segment in ordered_segments if dest_edge in segment]
+
+    return {
+        "start_segment_id": segment_to_id.get(ordered_segments[0]) if ordered_segments else None,
+        "destination_segment_ids": destination_segment_ids,
+        "segments": segments,
+        "segment_id_adjacency": segment_id_adjacency,
+    }
+
+
 if __name__ == "__main__":
-    graph = load_graph(fname=variables.PICKLED_GRAPH)
+    cprint("Starting subgraph construction...", "yellow")
+    cprint(f"-PLACE NAME : {variables.place_name.capitalize()}", "green")
+    cprint(f"-PATH TYPE: {variables.path_type}\n", "green")
 
+    cprint("Loading graph...", "yellow")
+    try:
+        graph = load_graph(fname=variables.PICKLED_GRAPH)
+        # Extract edges. The index here will be (u, v, key)
+        graph_edges = ox.graph_to_gdfs(graph, nodes=False)
+
+        # Create a safe lookup dictionary from the graph: (u, v, key) -> travel_time
+        uvk_to_time = graph_edges["travel_time"].to_dict()
+    except Exception as e:
+        cprint(f"FATAL: Could not load graph: {e}", "red")
+        exit(1)
+
+    cprint("Loading edge data...", "yellow")
     edges_df = gpd.read_file(variables.EDGE_DATA)
+    edges_df["travel_time"] = edges_df.apply(
+        lambda row: uvk_to_time.get((row.u, row.v, row.key), 1.0), axis=1
+    )
+    # Clean up any remaining NaNs
+    edges_df["travel_time"] = edges_df["travel_time"].fillna(1.0)
 
-    edge_id_to_uvk = {i: (row.u, row.v, row.key) for i, row in edges_df.iterrows()}
-    uvk_to_edge_id = {(row.u, row.v, row.key): i for i, row in edges_df.iterrows()}
-    gcd.edge_id_to_uvk = edge_id_to_uvk
-    gcd.uvk_to_edge_id = uvk_to_edge_id
+    cprint("Building edge ID to UVK dictionary...", "yellow")
+    edge_id_to_uvk = {int(i): (row.u, row.v, row.key) for i, row in edges_df.iterrows()}
 
+    cprint("Building edge attribute dictionaries...", "yellow")
+    edge_dicts = build_edge_attribute_dicts(graph, edges_df, edge_id_to_uvk)
+
+    cprint("Loading seed paths...", "yellow")
     filtered_train_data = f"filtered_train_data/{variables.path_type}/{variables.place_name}_data"
     try:
         with open(filtered_train_data, "rb") as f:
@@ -212,3 +470,29 @@ if __name__ == "__main__":
     Path(f"compressed_subgraphs/{variables.path_type}").mkdir(parents=True, exist_ok=True)
     with open(f"compressed_subgraphs/{variables.path_type}/{variables.place_name}_data", "wb") as f:
         pickle.dump(final_compressed_graphs, f)
+
+    cprint("Building deterministic global segment registry...", "yellow")
+    segment_registry = build_global_segment_registry(final_compressed_graphs)
+    cprint(f"Assigned {segment_registry['segment_count']} global segment IDs.", "green")
+
+    final_symbolic_graphs = {}
+    segment_to_id = segment_registry["segment_to_id"]
+
+    cprint("Building symbolic subgraphs with global segment IDs...", "yellow")
+    for od_pair, compressed_subgraph in tqdm(
+        final_compressed_graphs.items(), desc="Symbolizing", dynamic_ncols=True
+    ):
+        start_edge, dest_edge = od_pair
+        symbolic_subgraph = build_symbolic_subgraph(
+            compressed_subgraph, edge_dicts, start_edge, dest_edge, segment_to_id
+        )
+        final_symbolic_graphs[od_pair] = symbolic_subgraph
+
+    Path(f"symbolic_subgraphs/{variables.path_type}").mkdir(parents=True, exist_ok=True)
+    with open(f"symbolic_subgraphs/{variables.path_type}/{variables.place_name}_data", "wb") as f:
+        pickle.dump(final_symbolic_graphs, f)
+
+    with open(f"symbolic_subgraphs/{variables.path_type}/{variables.place_name}_segment_registry", "wb") as f:
+        pickle.dump(segment_registry, f)
+
+    cprint("Symbolic dual-representation subgraphs and segment registry saved successfully!", "green")
