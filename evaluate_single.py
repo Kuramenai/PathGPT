@@ -280,10 +280,13 @@ if __name__ == "__main__":
     avg_recall = np.mean(all_recalls) * 100
     success_rate = (valid_routes_count / len(raw_llm_outputs)) * 100
     topology_rate = (topologically_valid_count / len(raw_llm_outputs)) * 100
+    topology_rate_on_generated = (
+        (topologically_valid_count / valid_routes_count) * 100 if valid_routes_count else 0.0
+    )
 
     cprint(f"\nResults for {variables.place_name} ({variables.path_type}):", "green", attrs=["bold"])
     print(f"Total Samples Tested: {len(raw_llm_outputs)}")
-    print(f"Valid JSON Routes Generated: {success_rate:.2f}%")
+    print(f"Valid JSON Routes Generated: {valid_routes_count}/{len(raw_llm_outputs)} ({success_rate:.2f}%)")
     print("-" * 30)
     metric_prefix = "Average Edge" if variables.use_context else "Average Road"
     cprint(f"{metric_prefix} Precision: {avg_precision:.2f}%", "cyan")
@@ -291,4 +294,8 @@ if __name__ == "__main__":
     if variables.use_context and all_road_precisions:
         cprint(f"Average Road Precision: {np.mean(all_road_precisions) * 100:.2f}%", "cyan")
         cprint(f"Average Road Recall:    {np.mean(all_road_recalls) * 100:.2f}%", "cyan")
-    cprint(f"Topologically Valid Routes: {topology_rate:.2f}%", "cyan")
+    cprint(
+        f"Topologically Valid Routes: {topologically_valid_count}/{len(raw_llm_outputs)} "
+        f"({topology_rate:.2f}% of all samples, {topology_rate_on_generated:.2f}% of generated routes)",
+        "cyan",
+    )
