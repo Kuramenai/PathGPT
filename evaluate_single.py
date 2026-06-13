@@ -5,8 +5,9 @@ import variables
 import numpy as np
 import pandas as pd
 import geopandas as gpd
+import networkx as nx
 from collections import defaultdict
-from typing import Any, Dict, List, Set
+from typing import Any, Dict, List, Optional, Set, Tuple
 from termcolor import cprint
 from filter_custom_dataset import clean_street_name
 
@@ -184,6 +185,125 @@ def build_edge_id_to_name(edges_df: pd.DataFrame) -> Dict[int, str]:
     return edge_id_to_name
 
 
+def safe_float(value: Any, default: float = 1.0) -> float:
+    try:
+        if value is None or value != value:
+            return default
+        return float(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def build_repair_graph(edges_df: pd.DataFrame) -> nx.Graph:
+    repair_graph = nx.Graph()
+    for edge_id, row in edges_df.iterrows():
+        u, v = row.u, row.v
+        length = safe_float(row.get("length", 1.0))
+        edge_id = int(edge_id)
+
+        if repair_graph.has_edge(u, v) and repair_graph[u][v]["weight"] <= length:
+            continue
+        repair_graph.add_edge(u, v, weight=length, edge_id=edge_id)
+    return repair_graph
+
+
+def path_length(node_path: List[Any], repair_graph: nx.Graph) -> float:
+    return sum(repair_graph[u][v]["weight"] for u, v in zip(node_path, node_path[1:]))
+
+
+def node_path_to_edge_ids(node_path: List[Any], repair_graph: nx.Graph) -> List[int]:
+    return [int(repair_graph[u][v]["edge_id"]) for u, v in zip(node_path, node_path[1:])]
+
+
+def shortest_bridge_edges(
+    prev_edge: int,
+    next_edge: int,
+    edge_id_to_uvk: Dict[int, tuple],
+    repair_graph: nx.Graph,
+    bridge_cache: Dict[Tuple[int, int], Optional[List[int]]],
+) -> Optional[List[int]]:
+    key = (int(prev_edge), int(next_edge))
+    if key in bridge_cache:
+        return bridge_cache[key]
+
+    prev_uvk = edge_id_to_uvk.get(int(prev_edge))
+    next_uvk = edge_id_to_uvk.get(int(next_edge))
+    if not prev_uvk or not next_uvk:
+        bridge_cache[key] = None
+        return None
+
+    prev_nodes = (prev_uvk[0], prev_uvk[1])
+    next_nodes = (next_uvk[0], next_uvk[1])
+    if set(prev_nodes) & set(next_nodes):
+        bridge_cache[key] = []
+        return []
+
+    best_path = None
+    best_length = float("inf")
+    for source in prev_nodes:
+        for target in next_nodes:
+            try:
+                node_path = nx.shortest_path(repair_graph, source, target, weight="weight")
+            except (nx.NetworkXNoPath, nx.NodeNotFound):
+                continue
+
+            candidate_length = path_length(node_path, repair_graph)
+            if candidate_length < best_length:
+                best_length = candidate_length
+                best_path = node_path
+
+    bridge_edges = node_path_to_edge_ids(best_path, repair_graph) if best_path else None
+    bridge_cache[key] = bridge_edges
+    return bridge_edges
+
+
+def append_edge(edge_route: List[int], edge_id: int) -> None:
+    edge_id = int(edge_id)
+    if not edge_route or edge_route[-1] != edge_id:
+        edge_route.append(edge_id)
+
+
+def repair_edge_route(
+    edge_route: List[int],
+    edge_id_to_uvk: Dict[int, tuple],
+    repair_graph: nx.Graph,
+    bridge_cache: Dict[Tuple[int, int], Optional[List[int]]],
+    start_edge: Optional[int] = None,
+    dest_edge: Optional[int] = None,
+) -> Tuple[List[int], int, int, int]:
+    # ponytail: shortest-path gap stitching on the full edge graph; upgrade to corridor-bounded repair if needed.
+    if not edge_route:
+        return [], 0, 0, 0
+
+    route_to_repair = [int(edge_id) for edge_id in edge_route]
+    if start_edge is not None and route_to_repair[0] != int(start_edge):
+        route_to_repair.insert(0, int(start_edge))
+    if dest_edge is not None and route_to_repair[-1] != int(dest_edge):
+        route_to_repair.append(int(dest_edge))
+
+    repaired = [route_to_repair[0]]
+    attempted = 0
+    fixed = 0
+    failed = 0
+
+    for next_edge in route_to_repair[1:]:
+        bridge_edges = shortest_bridge_edges(repaired[-1], next_edge, edge_id_to_uvk, repair_graph, bridge_cache)
+        if bridge_edges is None:
+            attempted += 1
+            failed += 1
+            append_edge(repaired, next_edge)
+            continue
+
+        if bridge_edges:
+            attempted += 1
+            fixed += 1
+            for bridge_edge in bridge_edges:
+                append_edge(repaired, bridge_edge)
+        append_edge(repaired, next_edge)
+
+    return repaired, attempted, fixed, failed
+
+
 if __name__ == "__main__":
     cprint("\n--- STARTING EVALUATION ---", "yellow", attrs=["bold"])
 
@@ -210,6 +330,8 @@ if __name__ == "__main__":
     edges_df = gpd.read_file(variables.EDGE_DATA)
     edge_id_to_name = build_edge_id_to_name(edges_df)
     edge_id_to_uvk = build_edge_id_to_uvk(edges_df)
+    repair_graph = build_repair_graph(edges_df) if variables.use_context else None
+    bridge_cache = {}
 
     id_to_edges = {}
     if variables.use_context:
@@ -233,8 +355,16 @@ if __name__ == "__main__":
     all_recalls = []
     all_road_precisions = []
     all_road_recalls = []
+    repaired_edge_precisions = []
+    repaired_edge_recalls = []
+    repaired_road_precisions = []
+    repaired_road_recalls = []
     valid_routes_count = 0
     topologically_valid_count = 0
+    repaired_topologically_valid_count = 0
+    repair_attempted_count = 0
+    repair_fixed_count = 0
+    repair_failed_count = 0
 
     cprint("Evaluating generated routes...", "yellow")
     for i in range(len(raw_llm_outputs)):
@@ -248,11 +378,45 @@ if __name__ == "__main__":
 
             ground_truth_edges = path_collection.get(f"{variables.path_type}_path_edges", [])
             ground_truth_route = path_collection.get(f"{variables.path_type}_path_edges_names", [])
+            start_edge = ground_truth_edges[0] if ground_truth_edges else None
+            dest_edge = ground_truth_edges[-1] if ground_truth_edges else None
 
             if predicted_edges:
                 valid_routes_count += 1
                 if check_edge_connectivity(predicted_edges, edge_id_to_uvk):
                     topologically_valid_count += 1
+
+                repaired_edges, attempted, fixed, failed = repair_edge_route(
+                    predicted_edges,
+                    edge_id_to_uvk,
+                    repair_graph,
+                    bridge_cache,
+                    start_edge=start_edge,
+                    dest_edge=dest_edge,
+                )
+                repaired_route = edge_ids_to_road_names(repaired_edges, edge_id_to_name)
+
+                repair_attempted_count += attempted
+                repair_fixed_count += fixed
+                repair_failed_count += failed
+                if check_edge_connectivity(repaired_edges, edge_id_to_uvk):
+                    repaired_topologically_valid_count += 1
+
+                if ground_truth_edges:
+                    repaired_p, repaired_r = calculate_metrics(repaired_edges, ground_truth_edges)
+                else:
+                    repaired_p, repaired_r = calculate_metrics(repaired_route, ground_truth_route)
+                repaired_edge_precisions.append(repaired_p)
+                repaired_edge_recalls.append(repaired_r)
+
+                repaired_road_p, repaired_road_r = calculate_metrics(repaired_route, ground_truth_route)
+                repaired_road_precisions.append(repaired_road_p)
+                repaired_road_recalls.append(repaired_road_r)
+            else:
+                repaired_edge_precisions.append(0.0)
+                repaired_edge_recalls.append(0.0)
+                repaired_road_precisions.append(0.0)
+                repaired_road_recalls.append(0.0)
 
             if ground_truth_edges:
                 p, r = calculate_metrics(predicted_edges, ground_truth_edges)
@@ -283,6 +447,10 @@ if __name__ == "__main__":
     topology_rate_on_generated = (
         (topologically_valid_count / valid_routes_count) * 100 if valid_routes_count else 0.0
     )
+    repaired_topology_rate = (repaired_topologically_valid_count / len(raw_llm_outputs)) * 100
+    repaired_topology_rate_on_generated = (
+        (repaired_topologically_valid_count / valid_routes_count) * 100 if valid_routes_count else 0.0
+    )
 
     cprint(f"\nResults for {variables.place_name} ({variables.path_type}):", "green", attrs=["bold"])
     print(f"Total Samples Tested: {len(raw_llm_outputs)}")
@@ -299,3 +467,20 @@ if __name__ == "__main__":
         f"({topology_rate:.2f}% of all samples, {topology_rate_on_generated:.2f}% of generated routes)",
         "cyan",
     )
+    if variables.use_context:
+        print("-" * 30)
+        cprint("After Graph Repair:", "green", attrs=["bold"])
+        cprint(f"Repaired Edge Precision: {np.mean(repaired_edge_precisions) * 100:.2f}%", "cyan")
+        cprint(f"Repaired Edge Recall:    {np.mean(repaired_edge_recalls) * 100:.2f}%", "cyan")
+        cprint(f"Repaired Road Precision: {np.mean(repaired_road_precisions) * 100:.2f}%", "cyan")
+        cprint(f"Repaired Road Recall:    {np.mean(repaired_road_recalls) * 100:.2f}%", "cyan")
+        cprint(
+            f"Repaired Topologically Valid Routes: {repaired_topologically_valid_count}/{len(raw_llm_outputs)} "
+            f"({repaired_topology_rate:.2f}% of all samples, "
+            f"{repaired_topology_rate_on_generated:.2f}% of generated routes)",
+            "cyan",
+        )
+        cprint(
+            f"Repair Gaps: fixed {repair_fixed_count}/{repair_attempted_count}, failed {repair_failed_count}",
+            "cyan",
+        )
