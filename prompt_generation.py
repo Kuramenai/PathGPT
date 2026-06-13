@@ -21,13 +21,11 @@ os.environ["XLA_PYTHON_CLIENT_PREALLOCATE"] = "false"
 
 
 def welcome_text():
-    cprint("\n\nGENERATING PATHS USING :", "light_yellow", attrs=["bold"])
+    cprint("\n\nGENERATING PROMPTS FOR :", "light_yellow", attrs=["bold"])
     cprint(f"-DATASET : {variables.place_name}", "green")
     cprint(f"-PATH TYPE : {variables.path_type}", "green")
-    cprint(f"-LLM : {variables.llm}", "green")
-    cprint(f"-EMBEDDING MODEL : {variables.embedding_model_formatted_name}", "green")
     cprint(f"-USE CONTEXT : {variables.use_context}", "green")
-    cprint(f"-NO DOCUMENTS TO RETRIEVE : {variables.number_of_docs_to_retrieve}", "green")
+    cprint(f"-NUMBER OF DOCUMENTS TO RETRIEVE : {variables.number_of_docs_to_retrieve}", "green")
 
 
 def tokenize_chinese(text: str) -> list[str]:
@@ -163,7 +161,7 @@ if __name__ == "__main__":
         model_name=variables.embedding_model,
         model_kwargs=variables.model_kwargs,
         encode_kwargs=variables.encode_kwargs,
-        show_progress=True,
+        show_progress=False,
     )
 
     # Embed the dense text representation, NOT the markdown
@@ -228,9 +226,7 @@ if __name__ == "__main__":
         prompts_filepath = f"prompts/{variables.path_type}/no_context/"
 
     make_dir(prompts_filepath)
-    with open(
-        prompts_filepath + f"{variables.place_name}_prompts_top_{top_k_final}", "wb"
-    ) as f:
+    with open(prompts_filepath + f"{variables.place_name}_prompts_top_{top_k_final}", "wb") as f:
         pickle.dump(prompts, f)
     cprint("Prompts saved.", "green")
     cprint(f"\nSuccessfully generated {len(prompts)} prompts ready for Qwen3-8B!", "light_green")

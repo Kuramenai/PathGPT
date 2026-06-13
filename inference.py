@@ -58,7 +58,6 @@ if __name__ == "__main__":
         generated_text = output.outputs[0].text.strip()
 
         results.append(generated_text)
-        print(f"Generated text: {generated_text}")
 
     file_path = f"generated_paths/{variables.path_type}/"
     if variables.use_context:
@@ -71,3 +70,5 @@ if __name__ == "__main__":
         pickle.dump(results, f)
 
     cprint(f"File saved at {file_path}/{file_name} ", "green")
+
+    del llm
