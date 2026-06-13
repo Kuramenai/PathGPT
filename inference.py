@@ -10,10 +10,64 @@ from prompt_generation import welcome_text
 from vllm import LLM, SamplingParams
 from transformers import AutoTokenizer
 
+try:
+    from vllm.sampling_params import StructuredOutputsParams
+except ImportError:
+    StructuredOutputsParams = None
+
+
+def get_output_json_schema() -> dict:
+    if variables.use_context:
+        return {
+            "type": "object",
+            "properties": {
+                "route_segments": {
+                    "type": "array",
+                    "items": {"type": "string", "pattern": "^G[0-9]+$"},
+                }
+            },
+            "required": ["route_segments"],
+            "additionalProperties": False,
+        }
+
+    return {
+        "type": "object",
+        "properties": {
+            "route": {
+                "type": "array",
+                "items": {"type": "string"},
+            }
+        },
+        "required": ["route"],
+        "additionalProperties": False,
+    }
+
+
+def build_sampling_params() -> SamplingParams:
+    base_kwargs = {"temperature": 0.7, "top_p": 0.8, "top_k": 20, "max_tokens": 1024}
+    schema = get_output_json_schema()
+
+    if StructuredOutputsParams is not None:
+        try:
+            return SamplingParams(
+                **base_kwargs,
+                structured_outputs=StructuredOutputsParams(json=schema),
+            )
+        except TypeError:
+            pass
+
+    try:
+        # ponytail: old vLLM compatibility path. Remove when all runs use vLLM >= 0.12.
+        return SamplingParams(**base_kwargs, guided_json=schema)
+    except TypeError:
+        cprint("Structured JSON output is not supported by this vLLM version; using plain sampling.", "yellow")
+        return SamplingParams(**base_kwargs)
+
+
 if __name__ == "__main__":
     welcome_text()
 
-    sampling_params = SamplingParams(temperature=0.7, top_p=0.8, top_k=20, max_tokens=1024)
+    sampling_params = build_sampling_params()
 
     tokenizer = AutoTokenizer.from_pretrained("Qwen/Qwen3-8B")
 
