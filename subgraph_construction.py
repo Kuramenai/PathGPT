@@ -1,4 +1,5 @@
 import pickle
+import concurrent.futures
 from pathlib import Path
 import variables
 import networkx as nx
@@ -17,6 +18,9 @@ from itertools import islice
 Segment = Tuple[int, ...]
 CompressedSubgraph = Dict[Segment, Set[Segment]]
 
+_GRAPH = None
+_EDGE_ID_TO_UVK = None
+
 
 def _get_od_nodes(
     historical_path: List[int], edge_id_to_uvk: Dict[int, Tuple[int, int, int]]
@@ -29,57 +33,89 @@ def _get_od_nodes(
     return u, v
 
 
+def _init_k_shortest_worker(graph: nx.MultiDiGraph, edge_id_to_uvk: Dict[int, Tuple[int, int, int]]) -> None:
+    global _GRAPH, _EDGE_ID_TO_UVK
+    _GRAPH = graph
+    _EDGE_ID_TO_UVK = edge_id_to_uvk
+    gcd.edge_id_to_uvk = edge_id_to_uvk
+    gcd.uvk_to_edge_id = {uvk: edge_id for edge_id, uvk in edge_id_to_uvk.items()}
+
+
+def _compute_k_shortest_for_od(
+    task: Tuple[Tuple[int, int], List[int], int],
+) -> Tuple[Tuple[int, int], List[List[int]]]:
+    od_pair, historical_path, top_k = task
+    try:
+        start_node, destination_node = _get_od_nodes(historical_path, _EDGE_ID_TO_UVK)
+        node_paths = ox.routing.k_shortest_paths(
+            _GRAPH, start_node, destination_node, k=top_k, weight="length"
+        )
+        edge_paths = [remap_to_edges(p, _GRAPH, "length") for p in islice(node_paths, top_k)]
+    except (nx.NetworkXNoPath, nx.NodeNotFound, ValueError):
+        edge_paths = []
+    return od_pair, edge_paths
+
+
 def construct_local_subgraphs(
     graph: nx.MultiDiGraph,
     dataset: List[Dict[str, Any]],
     edge_id_to_uvk: Dict[int, Tuple[int, int, int]],
     top_k: int = 3,
+    n_cores: int = 12,
 ) -> Dict[Tuple[int, int], Dict[int, Set[int]]]:
     """
     Constructs a local subgraph (adjacency list) for each edge-level Origin-Destination pair
     by merging historical, fastest, shortest, and k-shortest paths.
     """
-    gcd.edge_id_to_uvk = edge_id_to_uvk
-    gcd.uvk_to_edge_id = {uvk: edge_id for edge_id, uvk in edge_id_to_uvk.items()}
+    _init_k_shortest_worker(graph, edge_id_to_uvk)
 
-    # Nested defaultdict: OD_pair -> { current_edge -> {next_edge_1, next_edge_2} }
+    # Collect unique OD pairs
+    od_to_historical: Dict[Tuple[int, int], List[int]] = {}
+    for path_collection in dataset:
+        historical_path = path_collection.get("historical_path_edges", [])
+        if not historical_path:
+            continue
+        od_pair = (historical_path[0], historical_path[-1])
+        od_to_historical.setdefault(od_pair, historical_path)
+
+    tasks = [(od_pair, hist, top_k) for od_pair, hist in od_to_historical.items()]
+    if n_cores > 1 and len(tasks) > 1:
+        with concurrent.futures.ProcessPoolExecutor(
+            max_workers=n_cores, initializer=_init_k_shortest_worker, initargs=(graph, edge_id_to_uvk)
+        ) as executor:
+            od_pair_k_shortest_map = dict(
+                tqdm(
+                    executor.map(_compute_k_shortest_for_od, tasks, chunksize=50),
+                    total=len(tasks),
+                    dynamic_ncols=True,
+                    desc="k-shortest paths",
+                )
+            )
+    else:
+        od_pair_k_shortest_map = dict(
+            tqdm(
+                (_compute_k_shortest_for_od(task) for task in tasks),
+                total=len(tasks),
+                dynamic_ncols=True,
+                desc="k-shortest paths",
+            )
+        )
+
     subgraphs = defaultdict(lambda: defaultdict(set))
-
-    od_pair_k_shortest_map = defaultdict(list)
     for path_collection in tqdm(
         dataset, total=len(dataset), dynamic_ncols=True, desc="Generating local subgraphs"
     ):
-        # Safely get paths (in case some are missing)
         historical_path = path_collection.get("historical_path_edges", [])
         fastest_path = path_collection.get("fastest_path_edges", [])
         shortest_path = path_collection.get("shortest_path_edges", [])
-        # custom_path = path_collection.get(f"{variables.path_type}_path_edges", [])
 
-        # Skip if there's no historical path to define the OD pair
         if not historical_path:
             continue
 
-        start_edge, destination_edge = historical_path[0], historical_path[-1]
-        od_pair = (start_edge, destination_edge)
+        od_pair = (historical_path[0], historical_path[-1])
+        top_k_shortest = od_pair_k_shortest_map.get(od_pair, [])
 
-        # if od_pair not in od_pair_k_shortest_map:
-        #     try:
-        #         start_node, destination_node = _get_od_nodes(historical_path, edge_id_to_uvk)
-        #         top_k_shortest_nodes_paths = nx.shortest_simple_paths(
-        #             graph, start_node, destination_node, weight="length"
-        #         )
-        #         top_k_shortest_edges_paths = [
-        #             remap_to_edges(p, graph, "length") for p in islice(top_k_shortest_nodes_paths, top_k)
-        #         ]
-        #     except (nx.NetworkXNoPath, nx.NodeNotFound, ValueError):
-        #         top_k_shortest_edges_paths = []
-        #     od_pair_k_shortest_map[od_pair] = top_k_shortest_edges_paths
-
-        # top_k_shortest = od_pair_k_shortest_map[od_pair]
-
-        # Merge all edges from all paths into the subgraph
-        # for path in [historical_path, fastest_path, shortest_path, *top_k_shortest]:
-        for path in [historical_path, fastest_path, shortest_path]:
+        for path in [historical_path, fastest_path, shortest_path, *top_k_shortest]:
             if not path:
                 continue  # Skip empty paths
             if len(path) == 1:
@@ -447,7 +483,7 @@ if __name__ == "__main__":
 
     # 1. Build the uncompressed subgraphs
     cprint("Constructing raw local subgraphs...", "yellow")
-    uncompressed_subgraphs = construct_local_subgraphs(graph, data, edge_id_to_uvk)
+    uncompressed_subgraphs = construct_local_subgraphs(graph, data, edge_id_to_uvk, top_k=10, n_cores=4)
 
     Path(f"uncompressed_subgraphs/{variables.path_type}").mkdir(parents=True, exist_ok=True)
     with open(f"uncompressed_subgraphs/{variables.path_type}/{variables.place_name}_data.pkl", "wb") as f:
