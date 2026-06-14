@@ -88,9 +88,7 @@ def edge_id_to_node_id(path: List[int]) -> List[int]:
         nodes.extend([v1, u1])
     else:
         # Edge case: Map matching failed, and the first two edges don't even touch
-        raise ValueError(
-            f"Disconnected edges at the start of path: edge {path[0]} and {path[1]}"
-        )
+        raise ValueError(f"Disconnected edges at the start of path: edge {path[0]} and {path[1]}")
 
     # 2. Iterate through the rest of the path, chaining the connecting nodes
     for edge_id in path[1:]:
@@ -103,9 +101,7 @@ def edge_id_to_node_id(path: List[int]) -> List[int]:
             nodes.append(u)
         else:
             # Edge case: Disconnected edge found in the middle of the trajectory
-            raise ValueError(
-                f"Disconnected edge {edge_id} in path. Does not connect to node {last_node}."
-            )
+            raise ValueError(f"Disconnected edge {edge_id} in path. Does not connect to node {last_node}.")
 
     return nodes
     # return [edge_id_to_uvk[path[0]][0], edge_id_to_uvk[path[0]][1]] + [
@@ -186,9 +182,7 @@ def load_graph(fname: str) -> nx.MultiDiGraph:
     # fmt: on
 
 
-def load_data(
-    fname: str, less: bool = False, samples: int = 35_000
-) -> List[Tuple[int, List[int], int]]:
+def load_data(fname: str, less: bool = False, samples: int = 35_000) -> List[Tuple[int, List[int], int]]:
     """
     Load the data.
 
@@ -220,21 +214,11 @@ def load_data(
             data = data
 
     # Make sure that each edge corresponds to a unique edge it
-    data = [
-        (idx, condense_edges(t), timestamps)
-        for (idx, t, timestamps) in tqdm(data, dynamic_ncols=True)
-    ]
+    data = [(idx, condense_edges(t), timestamps) for (idx, t, timestamps) in tqdm(data, dynamic_ncols=True)]
     # Remove loops
-    data = [
-        (idx, remove_loops(t), timestamps)
-        for (idx, t, timestamps) in tqdm(data, dynamic_ncols=True)
-    ]
+    data = [(idx, remove_loops(t), timestamps) for (idx, t, timestamps) in tqdm(data, dynamic_ncols=True)]
     # ignoring very small trips
-    data = [
-        (idx, t, timestamps)
-        for (idx, t, timestamps) in tqdm(data, dynamic_ncols=True)
-        if len(t) >= 5
-    ]
+    data = [(idx, t, timestamps) for (idx, t, timestamps) in tqdm(data, dynamic_ncols=True) if len(t) >= 5]
 
     return data
 
@@ -305,9 +289,112 @@ def calculate_edge_fuel_efficiency_weight(u: int, v: int, data) -> int:
     return cost
 
 
-def calculate_edge_touristic_weight():
-    "Coming SOON"
-    pass
+POI_TYPE_COLS = ("tourism", "amenity", "historic", "leisure", "natural")
+POI_NAME_COLS = ("name", "name:zh", "name:en")
+POI_CONTEXT_LIMIT = 3
+
+
+def _first_poi_field(row: pd.Series, columns: Tuple[str, ...]) -> str:
+    for col in columns:
+        if col not in row.index:
+            continue
+        val = row[col]
+        if pd.notna(val) and str(val).strip():
+            return str(val).strip()
+    return ""
+
+
+def build_poi_catalog(pois_proj: gpd.GeoDataFrame) -> Dict[int, Dict[str, str]]:
+    return {
+        poi_id: {
+            "name": _first_poi_field(pois_proj.iloc[poi_id], POI_NAME_COLS),
+            "type": _first_poi_field(pois_proj.iloc[poi_id], POI_TYPE_COLS),
+        }
+        for poi_id in range(len(pois_proj))
+    }
+
+
+def poi_catalog_path() -> str:
+    return f"pois/{variables.place_name}_poi_catalog"
+
+
+assert build_poi_catalog(gpd.GeoDataFrame({"name": ["故宫"], "tourism": ["museum"]})) == {
+    0: {"name": "故宫", "type": "museum"}
+}
+
+
+def label_poi_proximal_edges(
+    graph: nx.MultiDiGraph,
+    edges_df: gpd.GeoDataFrame,
+    pois_proj: gpd.GeoDataFrame,
+    threshold_m: float = 50.0,
+) -> int:
+    """Mark edges within threshold_m of any POI. pois_proj must be projected and reindexed 0..n-1."""
+    edges_proj = edges_df.to_crs(3857)
+    if pois_proj.crs != edges_proj.crs:
+        pois_proj = pois_proj.to_crs(edges_proj.crs)
+    poi_zones = gpd.GeoDataFrame(
+        {"poi_id": np.arange(len(pois_proj))},
+        geometry=pois_proj.geometry.buffer(threshold_m),
+        crs=edges_proj.crs,
+    )
+    near_edges = gpd.sjoin(
+        edges_proj,
+        poi_zones,
+        how="inner",
+        predicate="intersects",
+    )
+
+    nx.set_edge_attributes(graph, False, "is_near_poi")
+    nx.set_edge_attributes(graph, frozenset(), "poi_ids")
+
+    near_attrs = {}
+    poi_ids_by_edge: Dict[Tuple[int, int, int], set] = {}
+    poi_id_col = "poi_id_right" if "poi_id_right" in near_edges.columns else "poi_id"
+    for _, row in near_edges.iterrows():
+        uvk = (row["u"], row["v"], row["key"])
+        near_attrs[uvk] = True
+        poi_ids_by_edge.setdefault(uvk, set()).add(int(row[poi_id_col]))
+
+    nx.set_edge_attributes(graph, near_attrs, "is_near_poi")
+    for u, v, key, poi_ids in (
+        (u, v, k, frozenset(poi_ids)) for (u, v, k), poi_ids in poi_ids_by_edge.items()
+    ):
+        graph[u][v][key]["poi_ids"] = poi_ids
+
+    return len(poi_ids_by_edge)
+
+
+def calculate_poi_aware_weight(u: int, v: int, data) -> float:
+    """Route weight: cheap near POIs, else normal length (used as one k-path candidate)."""
+    length = data.get("length", 100.0)
+    if data.get("is_near_poi", False):
+        return length * 0.001
+    return length
+
+
+assert calculate_poi_aware_weight(0, 0, {"length": 100, "is_near_poi": True}) == 0.1
+assert calculate_poi_aware_weight(0, 0, {"length": 100}) == 100.0
+
+
+def apply_poi_aware_weights(
+    graph: nx.MultiDiGraph,
+    edges_df: gpd.GeoDataFrame,
+    threshold_m: float = 50.0,
+) -> None:
+    with open(f"pois/{variables.place_name}_pois", "rb") as f:
+        pois = pickle.load(f)
+
+    pois_proj = pois.to_crs(edges_df.to_crs(3857).crs).reset_index(drop=True)
+    catalog = build_poi_catalog(pois_proj)
+    near_count = label_poi_proximal_edges(graph, edges_df, pois_proj, threshold_m)
+    for u, v, k, data in graph.edges(keys=True, data=True):
+        data["touristic_value"] = calculate_poi_aware_weight(u, v, data)
+
+    with open(poi_catalog_path(), "wb") as f:
+        pickle.dump(catalog, f)
+
+    cprint(f"Marked {near_count} edges within {threshold_m}m of a POI.", "green")
 
 
 def init_worker(graph: nx.MultiDiGraph) -> None:
@@ -326,9 +413,7 @@ def init_worker(graph: nx.MultiDiGraph) -> None:
     GRAPH = graph
 
 
-def compute_paths(
-    path: List[int], custom_weight: str
-) -> Tuple[List[int], List[int], List[int], List[int]]:
+def compute_paths(path: List[int], custom_weight: str) -> Tuple[List[int], List[int], List[int], List[int]]:
     """
     Given a path, computes the shortest, fastest path and a custom path.
 
@@ -349,9 +434,9 @@ def compute_paths(
     try:
         fastest_path = nx.shortest_path(graph, start_node, destination_node, "travel_time")
         shortest_path = nx.shortest_path(graph, start_node, destination_node, "length")
-        highway_free_path = nx.shortest_path(graph, start_node, destination_node, weight=custom_weight)
+        custom_path = nx.shortest_path(graph, start_node, destination_node, weight=custom_weight)
         
-        return (original_path, fastest_path, shortest_path, highway_free_path)
+        return (original_path, fastest_path, shortest_path, custom_path)
     except nx.NetworkXNoPath:
         return []
     # fmt: on
@@ -397,16 +482,12 @@ def augment_data(
 
     cprint("Generating new paths...", "light_green")
 
-    custom_weight_key = (
-        "fuel_cost" if custom_path_type == "fuel_efficient" else "touristic_value"
-    )
+    custom_weight_key = "fuel_cost" if custom_path_type == "fuel_efficient" else "touristic_value"
     worker_func = partial(compute_paths, custom_weight=custom_weight_key)
     with concurrent.futures.ProcessPoolExecutor(
         max_workers=n_cores, initializer=init_worker, initargs=(graph,)
     ) as executor:
-        data = list(
-            tqdm(executor.map(worker_func, data, chunksize=100), total=len(data))
-        )
+        data = list(tqdm(executor.map(worker_func, data, chunksize=100), total=len(data)))
 
     # fmt: off
     cprint("Building dataset...", "light_green")
@@ -458,9 +539,7 @@ def sanity_check(
     return dissimilarities
 
 
-def remap_to_edges(
-    nodes: List[int], graph: nx.MultiGraph, weight_metric: str
-) -> List[int]:
+def remap_to_edges(nodes: List[int], graph: nx.MultiGraph, weight_metric: str) -> List[int]:
     """
     Transforms a sequence of node IDs back into edge IDs.
     For multi-edges (parallel roads), it selects the specific edge
@@ -546,6 +625,10 @@ if __name__ == "__main__":
     uvk_to_edge_id = {(row.u, row.v, row.key): i for i, row in edges_df.iterrows()}
     edge_id_to_edge_length = {i: (row.length) for i, row in edges_df.iterrows()}
 
+    custom_path_type = variables.path_type
+    if custom_path_type == "poi_aware":
+        apply_poi_aware_weights(graph, edges_df)
+
     # Load data
     try:
         train_data = load_data(fname=variables.TRAIN_TRIP_DATA_PICKLED_WITH_TIMESTAMPS)
@@ -556,8 +639,7 @@ if __name__ == "__main__":
 
     # Set this value according to your system configuration! In our case setting it to to high caused freezing, so beware.
     # n_cores = os.cpu_count()
-    n_cores = 8
-    custom_path_type = variables.path_type
+    n_cores = 16
 
     # ===== TRAIN DATA =====
     cprint("\n" + "=" * 50, "light_yellow")

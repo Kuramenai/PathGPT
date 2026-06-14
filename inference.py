@@ -60,7 +60,9 @@ def build_sampling_params() -> SamplingParams:
         # ponytail: old vLLM compatibility path. Remove when all runs use vLLM >= 0.12.
         return SamplingParams(**base_kwargs, guided_json=schema)
     except TypeError:
-        cprint("Structured JSON output is not supported by this vLLM version; using plain sampling.", "yellow")
+        cprint(
+            "Structured JSON output is not supported by this vLLM version; using plain sampling.", "yellow"
+        )
         return SamplingParams(**base_kwargs)
 
 
@@ -84,7 +86,9 @@ if __name__ == "__main__":
 
     try:
         with open(
-            prompts_filepath + f"{variables.place_name}_prompts_top_{number_of_documents_to_retrieve}", "rb"
+            prompts_filepath
+            + f"{variables.place_name}_prompts_{variables.retrieval_type}_top_{number_of_documents_to_retrieve}",
+            "rb",
         ) as f:
             prompts = pickle.load(f)
     except FileNotFoundError:
@@ -115,7 +119,7 @@ if __name__ == "__main__":
 
     file_path = f"generated_paths/{variables.path_type}/"
     if variables.use_context:
-        file_name = f"with_context_{variables.place_name}_top_{variables.number_of_docs_to_retrieve}"
+        file_name = f"{variables.retrieval_type}_context_{variables.place_name}_top_{variables.number_of_docs_to_retrieve}"
     else:
         file_name = f"no_context_{variables.place_name}_top_{variables.number_of_docs_to_retrieve}"
 

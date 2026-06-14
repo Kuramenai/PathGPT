@@ -42,11 +42,23 @@ def generate_markdown_prompt(
             role_labels.append("终点段")
         role_text = f" ({'、'.join(role_labels)})" if role_labels else ""
 
+        poi_extra = ""
+        if segment.get("poi_count", 0):
+            poi_names = segment.get("poi_names") or []
+            poi_types = segment.get("poi_types") or []
+            if poi_names:
+                poi_extra += f"景点: {'、'.join(poi_names)} | "
+            if poi_types:
+                poi_extra += f"景点类型: {'、'.join(poi_types)} | "
+
         topology_lines.append(
             f"- {segment_id}{role_text}: {segment.get('display_name', '未知道路')} | "
             f"类型: {road_types} | "
             f"长度: {segment.get('length_m', 0)}m | "
             f"预计用时: {segment.get('travel_time_s', 0)}s | "
+            f"邻近景点: {'是' if segment.get('near_poi') else '否'} | "
+            f"景点数: {segment.get('poi_count', 0)} | "
+            f"{poi_extra}"
             f"可连接到: {next_text}"
         )
 

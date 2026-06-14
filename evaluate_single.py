@@ -287,7 +287,9 @@ def repair_edge_route(
     failed = 0
 
     for next_edge in route_to_repair[1:]:
-        bridge_edges = shortest_bridge_edges(repaired[-1], next_edge, edge_id_to_uvk, repair_graph, bridge_cache)
+        bridge_edges = shortest_bridge_edges(
+            repaired[-1], next_edge, edge_id_to_uvk, repair_graph, bridge_cache
+        )
         if bridge_edges is None:
             attempted += 1
             failed += 1
@@ -310,7 +312,7 @@ if __name__ == "__main__":
     # 1. Load the generated results from the previous vLLM script
     file_path = f"generated_paths/{variables.path_type}/"
     if variables.use_context:
-        file_name = f"with_context_{variables.place_name}_top_{variables.number_of_docs_to_retrieve}"
+        file_name = f"{variables.retrieval_type}_context_{variables.place_name}_top_{variables.number_of_docs_to_retrieve}"
     else:
         file_name = f"no_context_{variables.place_name}_top_{variables.number_of_docs_to_retrieve}"
 

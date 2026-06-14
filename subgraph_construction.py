@@ -10,13 +10,14 @@ from collections import defaultdict, deque
 from generate_custom_dataset import edge_id_to_node_id
 import generate_custom_dataset as gcd
 from typing import List, Dict, Any, Set, Tuple
-from generate_custom_dataset import load_graph, remap_to_edges
+from generate_custom_dataset import apply_poi_aware_weights, load_graph, poi_catalog_path, remap_to_edges
 from filter_custom_dataset import clean_street_name
 import osmnx as ox
 from itertools import islice
 
 Segment = Tuple[int, ...]
 CompressedSubgraph = Dict[Segment, Set[Segment]]
+POI_CONTEXT_LIMIT = 3
 
 _GRAPH = None
 _EDGE_ID_TO_UVK = None
@@ -249,6 +250,8 @@ def build_edge_attribute_dicts(
     edge_id_to_length = {}
     edge_id_to_time = {}
     edge_id_to_type = {}
+    edge_id_to_near_poi = {}
+    edge_id_to_poi_ids = {}
 
     for edge_id, row in edges_df.iterrows():
         edge_id = int(edge_id)
@@ -267,16 +270,24 @@ def build_edge_attribute_dicts(
         edge_id_to_length[edge_id] = _safe_float(raw_length)
         edge_id_to_time[edge_id] = _safe_float(raw_time)
         edge_id_to_type[edge_id] = raw_type
+        edge_id_to_near_poi[edge_id] = bool(edge_data.get("is_near_poi", False))
+        edge_id_to_poi_ids[edge_id] = edge_data.get("poi_ids", frozenset())
 
     return {
         "edge_id_to_name": edge_id_to_name,
         "edge_id_to_length": edge_id_to_length,
         "edge_id_to_time": edge_id_to_time,
         "edge_id_to_type": edge_id_to_type,
+        "edge_id_to_near_poi": edge_id_to_near_poi,
+        "edge_id_to_poi_ids": edge_id_to_poi_ids,
     }
 
 
-def describe_segment(segment: Segment, edge_dicts: Dict[str, Dict[int, Any]]) -> Dict[str, Any]:
+def describe_segment(
+    segment: Segment,
+    edge_dicts: Dict[str, Dict[int, Any]],
+    poi_catalog: Dict[int, Dict[str, str]] = None,
+) -> Dict[str, Any]:
     """
     Builds human-readable semantics for one compressed segment tuple.
     """
@@ -284,6 +295,8 @@ def describe_segment(segment: Segment, edge_dicts: Dict[str, Dict[int, Any]]) ->
     road_types = set()
     total_length = 0.0
     total_time = 0.0
+    poi_ids = set()
+    near_poi = False
 
     for edge_id in segment:
         raw_name = edge_dicts["edge_id_to_name"].get(edge_id, "Unnamed Road")
@@ -298,6 +311,20 @@ def describe_segment(segment: Segment, edge_dicts: Dict[str, Dict[int, Any]]) ->
 
         raw_type = edge_dicts["edge_id_to_type"].get(edge_id, "N/A")
         road_types.update(_normalize_attribute_values(raw_type))
+        near_poi = near_poi or edge_dicts["edge_id_to_near_poi"].get(edge_id, False)
+        poi_ids.update(edge_dicts["edge_id_to_poi_ids"].get(edge_id, frozenset()))
+
+    poi_catalog = poi_catalog or {}
+    poi_names = []
+    poi_types = []
+    for poi_id in sorted(poi_ids):
+        info = poi_catalog.get(int(poi_id), {})
+        poi_type = info.get("type", "")
+        poi_name = info.get("name", "")
+        if poi_type and poi_type not in poi_types:
+            poi_types.append(poi_type)
+        if poi_name and poi_name not in poi_names:
+            poi_names.append(poi_name)
 
     display_name = " -> ".join(road_names) if road_names else "Unknown Road"
     road_types = sorted(road_types)
@@ -309,6 +336,10 @@ def describe_segment(segment: Segment, edge_dicts: Dict[str, Dict[int, Any]]) ->
         "length_m": round(total_length, 2),
         "travel_time_s": round(total_time, 2),
         "road_types": road_types,
+        "near_poi": near_poi,
+        "poi_count": len(poi_ids),
+        "poi_names": poi_names[:POI_CONTEXT_LIMIT],
+        "poi_types": poi_types[:POI_CONTEXT_LIMIT],
     }
 
 
@@ -397,6 +428,7 @@ def build_symbolic_subgraph(
     start_edge: int,
     dest_edge: int,
     segment_to_id: Dict[Segment, str],
+    poi_catalog: Dict[int, Dict[str, str]] = None,
 ) -> Dict[str, Any]:
     """
     Adds global symbolic IDs and readable semantics to a compressed edge-tuple graph.
@@ -408,7 +440,7 @@ def build_symbolic_subgraph(
 
     for segment in ordered_segments:
         segment_id = segment_to_id[segment]
-        details = describe_segment(segment, edge_dicts)
+        details = describe_segment(segment, edge_dicts, poi_catalog=poi_catalog)
 
         details.update(
             {
@@ -465,6 +497,15 @@ if __name__ == "__main__":
     cprint("Building edge ID to UVK dictionary...", "yellow")
     edge_id_to_uvk = {int(i): (row.u, row.v, row.key) for i, row in edges_df.iterrows()}
 
+    if variables.path_type == "poi_aware":
+        apply_poi_aware_weights(graph, edges_df)
+
+    poi_catalog = {}
+    catalog_file = poi_catalog_path()
+    if Path(catalog_file).exists():
+        with open(catalog_file, "rb") as f:
+            poi_catalog = pickle.load(f)
+
     cprint("Building edge attribute dictionaries...", "yellow")
     edge_dicts = build_edge_attribute_dicts(graph, edges_df, edge_id_to_uvk)
 
@@ -483,7 +524,7 @@ if __name__ == "__main__":
 
     # 1. Build the uncompressed subgraphs
     cprint("Constructing raw local subgraphs...", "yellow")
-    uncompressed_subgraphs = construct_local_subgraphs(graph, data, edge_id_to_uvk, top_k=10, n_cores=4)
+    uncompressed_subgraphs = construct_local_subgraphs(graph, data, edge_id_to_uvk, top_k=1, n_cores=16)
 
     Path(f"uncompressed_subgraphs/{variables.path_type}").mkdir(parents=True, exist_ok=True)
     with open(f"uncompressed_subgraphs/{variables.path_type}/{variables.place_name}_data.pkl", "wb") as f:
@@ -520,7 +561,7 @@ if __name__ == "__main__":
     ):
         start_edge, dest_edge = od_pair
         symbolic_subgraph = build_symbolic_subgraph(
-            compressed_subgraph, edge_dicts, start_edge, dest_edge, segment_to_id
+            compressed_subgraph, edge_dicts, start_edge, dest_edge, segment_to_id, poi_catalog
         )
         final_symbolic_graphs[od_pair] = symbolic_subgraph
 

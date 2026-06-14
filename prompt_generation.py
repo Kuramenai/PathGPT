@@ -26,6 +26,39 @@ def welcome_text():
     cprint(f"-PATH TYPE : {variables.path_type}", "green")
     cprint(f"-USE CONTEXT : {variables.use_context}", "green")
     cprint(f"-NUMBER OF DOCUMENTS TO RETRIEVE : {variables.number_of_docs_to_retrieve}", "green")
+    cprint(f"-RETRIEVAL : {variables.retrieval_type}", "green")
+
+
+def retrieve_doc_indices(
+    query: str,
+    query_tokens: list[str],
+    retriever: bm25s.BM25 | None,
+    representation_model: HuggingFaceEmbeddings | None,
+    corpus_embeddings: np.ndarray | None,
+    top_k: int,
+    retrieval_type: str,
+) -> list[int]:
+    if retrieval_type == "bm25":
+        bm25_results, _ = retriever.retrieve([query_tokens], k=top_k)
+        return list(bm25_results[0])
+
+    if retrieval_type == "semantic":
+        query_embedding = np.array(representation_model.embed_query(query))
+        scores = corpus_embeddings @ query_embedding
+        return np.argsort(scores)[-top_k:][::-1].tolist()
+
+    bm25_candidate_count = max(9, top_k)
+    bm25_results, _ = retriever.retrieve([query_tokens], k=bm25_candidate_count)
+    candidate_indices = bm25_results[0]
+    query_embedding = np.array(representation_model.embed_query(query))
+    candidate_embeddings = corpus_embeddings[candidate_indices]
+    scores = candidate_embeddings @ query_embedding
+    best_candidate_positions = np.argsort(scores)[-top_k:][::-1]
+    return [candidate_indices[pos] for pos in best_candidate_positions]
+
+
+def prompts_output_name(top_k: int) -> str:
+    return f"{variables.place_name}_prompts_{variables.retrieval_type}_top_{top_k}"
 
 
 def tokenize_chinese(text: str) -> list[str]:
@@ -45,7 +78,7 @@ def generate_query(path_collection: dict) -> tuple[str, dict]:
     task_translation = {
         "fuel_efficient": "最省油",
         "highway_free": "避开高速",
-        "touristic": "适合观光",
+        "poi_aware": "经过景点最多的路线",
         "most_used": "最常用",
         "scenic": "风景最好",
         "fastest": "最快",
@@ -140,34 +173,32 @@ if __name__ == "__main__":
     embedding_corpus = [item["embedding_text"] for item in context_dataset]
     markdown_corpus = [item["llm_prompt"] for item in context_dataset]
 
-    # 2. INDEXING BM25 (Offline Phase)
-    cprint("\nTokenizing and Indexing the corpus for BM25...", "green")
-    start_time = time.time()
+    retrieval_type = variables.retrieval_type
+    need_bm25 = retrieval_type in ("bm25", "hybrid")
+    need_semantic = retrieval_type in ("semantic", "hybrid")
 
-    # Use our reproducible tokenizer
-    corpus_tokens = [tokenize_chinese(doc) for doc in embedding_corpus]
+    retriever = None
+    if need_bm25:
+        cprint("\nTokenizing and indexing the corpus for BM25...", "green")
+        start_time = time.time()
+        corpus_tokens = [tokenize_chinese(doc) for doc in embedding_corpus]
+        retriever = bm25s.BM25()
+        retriever.index(corpus_tokens)
+        cprint(f"BM25 indexing took {time.time() - start_time:.4f} seconds", "cyan")
 
-    retriever = bm25s.BM25()
-    retriever.index(corpus_tokens)
-
-    cprint(f"BM25 Indexing took {time.time() - start_time:.4f} seconds", "cyan")
-
-    # 3. PRE-COMPUTING EMBEDDINGS (Offline Phase)
-    # This completely removes the latency bottleneck from the inner loop!
-    cprint("\nPre-computing E5 embeddings for the entire corpus...", "yellow")
-    start_time = time.time()
-
-    representation_model = HuggingFaceEmbeddings(
-        model_name=variables.embedding_model,
-        model_kwargs=variables.model_kwargs,
-        encode_kwargs=variables.encode_kwargs,
-        show_progress=False,
-    )
-
-    # Embed the dense text representation, NOT the markdown
-    corpus_embeddings = np.array(representation_model.embed_documents(embedding_corpus))
-
-    cprint(f"Embedding generation took {time.time() - start_time:.4f} seconds", "cyan")
+    representation_model = None
+    corpus_embeddings = None
+    if need_semantic:
+        cprint("\nPre-computing E5 embeddings for the entire corpus...", "yellow")
+        start_time = time.time()
+        representation_model = HuggingFaceEmbeddings(
+            model_name=variables.embedding_model,
+            model_kwargs=variables.model_kwargs,
+            encode_kwargs=variables.encode_kwargs,
+            show_progress=False,
+        )
+        corpus_embeddings = np.array(representation_model.embed_documents(embedding_corpus))
+        cprint(f"Embedding generation took {time.time() - start_time:.4f} seconds", "cyan")
 
     # 4. LOAD TEST DATA
     test_data_filename = f"filtered_test_data/{variables.path_type}/{variables.place_name}_data"
@@ -183,42 +214,26 @@ if __name__ == "__main__":
         llm_query_dicts.append(l_query)
 
     # 5. RETRIEVAL & PROMPT GENERATION (Online Phase)
-    cprint("\nExecuting Hybrid Retrieval (BM25 + Semantic Re-ranking)...", "green")
+    cprint(f"\nExecuting {retrieval_type} retrieval...", "green")
 
-    bm25_candidate_count = max(9, variables.number_of_docs_to_retrieve)
     top_k_final = variables.number_of_docs_to_retrieve
-
     prompts = []
-    semantic_search_results = []
 
     for i in tqdm(range(len(retriever_queries)), dynamic_ncols=True, desc="Processing Queries"):
         r_query = retriever_queries[i]
         l_query_dict = llm_query_dicts[i]
-
-        # Step A: BM25 Lexical Filtering
         query_tokens = tokenize_chinese(r_query)
-        bm25_results, _ = retriever.retrieve([query_tokens], k=bm25_candidate_count)
-        candidate_indices = bm25_results[0]  # Get the indices of the top 9 hits
-
-        # Step B: Semantic Re-ranking (Lightning fast because we pre-embedded!)
-        query_embedding = np.array(representation_model.embed_query(r_query))
-        candidate_embeddings = corpus_embeddings[candidate_indices]
-
-        # Dot product for similarity
-        scores = candidate_embeddings @ query_embedding
-
-        # Sort and get the top_k_final indices relative to the candidate list
-        best_candidate_positions = np.argsort(scores)[-top_k_final:][::-1]
-
-        # Map back to the original corpus indices
-        final_indices = [candidate_indices[pos] for pos in best_candidate_positions]
-
-        # Step C: Generate Prompt using the MARKDOWN representations
+        final_indices = retrieve_doc_indices(
+            r_query,
+            query_tokens,
+            retriever,
+            representation_model,
+            corpus_embeddings,
+            top_k_final,
+            retrieval_type,
+        )
         retrieved_markdowns = [markdown_corpus[idx] for idx in final_indices]
-        semantic_search_results.append(retrieved_markdowns)
-
-        prompt = get_prompt(l_query_dict, retrieved_markdowns, variables.use_context)
-        prompts.append(prompt)
+        prompts.append(get_prompt(l_query_dict, retrieved_markdowns, variables.use_context))
 
     if variables.use_context:
         prompts_filepath = f"prompts/{variables.path_type}/with_context/"
@@ -226,7 +241,8 @@ if __name__ == "__main__":
         prompts_filepath = f"prompts/{variables.path_type}/no_context/"
 
     make_dir(prompts_filepath)
-    with open(prompts_filepath + f"{variables.place_name}_prompts_top_{top_k_final}", "wb") as f:
+    output_name = prompts_output_name(top_k_final)
+    with open(prompts_filepath + output_name, "wb") as f:
         pickle.dump(prompts, f)
-    cprint("Prompts saved.", "green")
+    cprint(f"Prompts saved to {prompts_filepath}{output_name}", "green")
     cprint(f"\nSuccessfully generated {len(prompts)} prompts ready for Qwen3-8B!", "light_green")

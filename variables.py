@@ -11,7 +11,7 @@ map_path_type = {
     "shortest": "最短",
     "most_used": "",
     "fuel_efficient": "不经过高速公路",
-    "touristic": "最适合观光旅游",
+    "poi_aware": "经过景点最多的路线",
 }
 save_as = args.save_as
 use_context = args.use_context
@@ -21,6 +21,7 @@ embedding_model_formatted_name = embedding_model.split("/")[1]
 model_kwargs = {"device": "cuda"}
 encode_kwargs = {"normalize_embeddings": True}
 number_of_docs_to_retrieve = args.top_k
+retrieval_type = args.retrieval
 evaluation_remarks = args.evaluation_remarks
 
 # fmt: off

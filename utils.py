@@ -29,6 +29,12 @@ def get_args():
     parser.add_argument("-llm", default="qwen2.5-14b", type=str)
     parser.add_argument("-embedding_model", default="intfloat/multilingual-e5-large-instruct", type=str)
     parser.add_argument("-top_k", default=9, type=int)
+    parser.add_argument(
+        "-retrieval",
+        default="hybrid",
+        choices=["bm25", "semantic", "hybrid"],
+        help="Retrieval mode: bm25, semantic, or hybrid (BM25 filter + semantic rerank).",
+    )
     parser.add_argument("-reset", action="store_true", help="Reset the database.")
     parser.add_argument("-evaluation_remarks", default="", type=str)
     args = parser.parse_args()
