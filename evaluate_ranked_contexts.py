@@ -172,8 +172,7 @@ def search_edge_graph(
 
     try:
         return [
-            int(edge_id)
-            for edge_id in nx.shortest_path(edge_graph, start_edge, dest_edge, weight="weight")
+            int(edge_id) for edge_id in nx.shortest_path(edge_graph, start_edge, dest_edge, weight="weight")
         ]
     except (nx.NetworkXNoPath, nx.NodeNotFound):
         return []
@@ -383,9 +382,7 @@ class StrategyStats:
             "generated": self.generated_count,
             "generated_rate": self.generated_count / total_samples if total_samples else 0.0,
             "topology_valid": self.topology_valid_count,
-            "topology_valid_rate": (
-                self.topology_valid_count / total_samples if total_samples else 0.0
-            ),
+            "topology_valid_rate": (self.topology_valid_count / total_samples if total_samples else 0.0),
             "topology_valid_rate_on_generated": (
                 self.topology_valid_count / self.generated_count if self.generated_count else 0.0
             ),
@@ -450,10 +447,7 @@ def print_strategy_summary(strategy_name: str, summary: dict, total_samples: int
     edge_f1 = f1(summary["edge_precision"], summary["edge_recall"])
     road_f1 = f1(summary["road_precision"], summary["road_recall"])
     cprint(f"\n{strategy_name}", "green", attrs=["bold"])
-    print(
-        f"Generated: {summary['generated']}/{total_samples} "
-        f"({summary['generated_rate'] * 100:.2f}%)"
-    )
+    print(f"Generated: {summary['generated']}/{total_samples} ({summary['generated_rate'] * 100:.2f}%)")
     print(
         f"Topology Valid: {summary['topology_valid']}/{total_samples} "
         f"({summary['topology_valid_rate'] * 100:.2f}% of all, "
@@ -531,6 +525,9 @@ def evaluate_ranked_contexts() -> None:
     except FileNotFoundError as exc:
         cprint(f"Error loading files: {exc}", "red")
         raise SystemExit(1)
+
+    if variables.place_name == "chengdu":
+        ground_truth_data = ground_truth_data[:1_500]
 
     metadata_queries = metadata.get("queries", [])
     if len(raw_llm_outputs) != len(ground_truth_data) or len(raw_llm_outputs) != len(metadata_queries):
@@ -709,8 +706,7 @@ def evaluate_ranked_contexts() -> None:
 
     total_samples = len(raw_llm_outputs)
     summaries = {
-        strategy_name: stats.summary(total_samples)
-        for strategy_name, stats in strategy_stats.items()
+        strategy_name: stats.summary(total_samples) for strategy_name, stats in strategy_stats.items()
     }
     retrieval_summary = retrieval_stats.summary(top_k)
     cascade_fallback = {

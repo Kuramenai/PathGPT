@@ -58,11 +58,7 @@ def get_output_json_schema() -> dict:
 
 def generated_output_name() -> str:
     if variables.use_context:
-        task_suffix = (
-            f"_{variables.llm_task}"
-            if variables.llm_task != "route_segments"
-            else ""
-        )
+        task_suffix = f"_{variables.llm_task}" if variables.llm_task != "route_segments" else ""
         return (
             f"{variables.retrieval_type}_context_{variables.place_name}_top_"
             f"{variables.number_of_docs_to_retrieve}{task_suffix}"
