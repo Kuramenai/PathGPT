@@ -61,6 +61,7 @@ def construct_local_subgraphs(
     graph: nx.MultiDiGraph,
     dataset: List[Dict[str, Any]],
     edge_id_to_uvk: Dict[int, Tuple[int, int, int]],
+    top_k_shortest: bool = False,
     top_k: int = 3,
     n_cores: int = 12,
 ) -> Dict[Tuple[int, int], Dict[int, Set[int]]]:
@@ -71,36 +72,37 @@ def construct_local_subgraphs(
     _init_k_shortest_worker(graph, edge_id_to_uvk)
 
     # Collect unique OD pairs
-    od_to_historical: Dict[Tuple[int, int], List[int]] = {}
-    for path_collection in dataset:
-        historical_path = path_collection.get("historical_path_edges", [])
-        if not historical_path:
-            continue
-        od_pair = (historical_path[0], historical_path[-1])
-        od_to_historical.setdefault(od_pair, historical_path)
+    if top_k_shortest:
+        od_to_historical: Dict[Tuple[int, int], List[int]] = {}
+        for path_collection in dataset:
+            historical_path = path_collection.get("historical_path_edges", [])
+            if not historical_path:
+                continue
+            od_pair = (historical_path[0], historical_path[-1])
+            od_to_historical.setdefault(od_pair, historical_path)
 
-    tasks = [(od_pair, hist, top_k) for od_pair, hist in od_to_historical.items()]
-    if n_cores > 1 and len(tasks) > 1:
-        with concurrent.futures.ProcessPoolExecutor(
-            max_workers=n_cores, initializer=_init_k_shortest_worker, initargs=(graph, edge_id_to_uvk)
-        ) as executor:
+        tasks = [(od_pair, hist, top_k) for od_pair, hist in od_to_historical.items()]
+        if n_cores > 1 and len(tasks) > 1:
+            with concurrent.futures.ProcessPoolExecutor(
+                max_workers=n_cores, initializer=_init_k_shortest_worker, initargs=(graph, edge_id_to_uvk)
+            ) as executor:
+                od_pair_k_shortest_map = dict(
+                    tqdm(
+                        executor.map(_compute_k_shortest_for_od, tasks, chunksize=50),
+                        total=len(tasks),
+                        dynamic_ncols=True,
+                        desc="k-shortest paths",
+                    )
+                )
+        else:
             od_pair_k_shortest_map = dict(
                 tqdm(
-                    executor.map(_compute_k_shortest_for_od, tasks, chunksize=50),
+                    (_compute_k_shortest_for_od(task) for task in tasks),
                     total=len(tasks),
                     dynamic_ncols=True,
                     desc="k-shortest paths",
                 )
             )
-    else:
-        od_pair_k_shortest_map = dict(
-            tqdm(
-                (_compute_k_shortest_for_od(task) for task in tasks),
-                total=len(tasks),
-                dynamic_ncols=True,
-                desc="k-shortest paths",
-            )
-        )
 
     subgraphs = defaultdict(lambda: defaultdict(set))
     for path_collection in tqdm(
@@ -114,7 +116,10 @@ def construct_local_subgraphs(
             continue
 
         od_pair = (historical_path[0], historical_path[-1])
-        top_k_shortest = od_pair_k_shortest_map.get(od_pair, [])
+        if top_k_shortest:
+            top_k_shortest = od_pair_k_shortest_map.get(od_pair, [])
+        else:
+            top_k_shortest = []
 
         for path in [historical_path, fastest_path, shortest_path, *top_k_shortest]:
             if not path:
@@ -524,7 +529,9 @@ if __name__ == "__main__":
 
     # 1. Build the uncompressed subgraphs
     cprint("Constructing raw local subgraphs...", "yellow")
-    uncompressed_subgraphs = construct_local_subgraphs(graph, data, edge_id_to_uvk, top_k=1, n_cores=16)
+    uncompressed_subgraphs = construct_local_subgraphs(
+        graph, data, edge_id_to_uvk, top_k_shortest=variables.top_k_shortest, top_k=1, n_cores=16
+    )
 
     Path(f"uncompressed_subgraphs/{variables.path_type}").mkdir(parents=True, exist_ok=True)
     with open(f"uncompressed_subgraphs/{variables.path_type}/{variables.place_name}_data.pkl", "wb") as f:

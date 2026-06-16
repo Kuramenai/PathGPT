@@ -133,9 +133,7 @@ def compute_spatial_scores(
         return scores
 
     origin_distances = np.linalg.norm(corpus_origin_points - np.asarray(query_origin), axis=1)
-    destination_distances = np.linalg.norm(
-        corpus_destination_points - np.asarray(query_destination), axis=1
-    )
+    destination_distances = np.linalg.norm(corpus_destination_points - np.asarray(query_destination), axis=1)
     od_distances = origin_distances + destination_distances
     valid = np.isfinite(od_distances)
     if not np.any(valid):
@@ -203,8 +201,7 @@ def retrieve_doc_indices(
         bm25_candidate_indices = np.asarray(bm25_results[0], dtype=int)
         bm25_candidate_scores = np.asarray(bm25_scores[0], dtype=float)
         bm25_score_by_index = {
-            int(idx): float(score)
-            for idx, score in zip(bm25_candidate_indices, bm25_candidate_scores)
+            int(idx): float(score) for idx, score in zip(bm25_candidate_indices, bm25_candidate_scores)
         }
 
         candidate_indices = sorted(
@@ -218,10 +215,9 @@ def retrieve_doc_indices(
             [bm25_score_by_index.get(int(idx), 0.0) for idx in candidate_indices], dtype=float
         )
 
-        first_stage_scores = (
-            spatial_weight * normalize_scores(candidate_spatial_scores)
-            + bm25_weight * normalize_scores(candidate_bm25_scores)
-        )
+        first_stage_scores = spatial_weight * normalize_scores(
+            candidate_spatial_scores
+        ) + bm25_weight * normalize_scores(candidate_bm25_scores)
         first_stage_positions = np.argsort(first_stage_scores)[::-1][:first_stage_k]
         first_stage_indices = [int(candidate_indices[pos]) for pos in first_stage_positions]
 
@@ -239,9 +235,7 @@ def retrieve_doc_indices(
                 "bm25_candidate_indices": [int(idx) for idx in bm25_candidate_indices],
                 "first_stage_indices": first_stage_indices,
                 "final_indices": final_indices,
-                "final_semantic_scores": [
-                    float(semantic_scores[pos]) for pos in best_candidate_positions
-                ],
+                "final_semantic_scores": [float(semantic_scores[pos]) for pos in best_candidate_positions],
             }
         )
         return (final_indices, metadata) if return_metadata else final_indices
@@ -259,9 +253,7 @@ def retrieve_doc_indices(
             "bm25_candidate_indices": [int(idx) for idx in candidate_indices],
             "bm25_candidate_scores": [float(score) for score in bm25_scores[0]],
             "final_indices": final_indices,
-            "final_semantic_scores": [
-                float(scores[pos]) for pos in best_candidate_positions
-            ],
+            "final_semantic_scores": [float(scores[pos]) for pos in best_candidate_positions],
         }
     )
     return (final_indices, metadata) if return_metadata else final_indices
@@ -269,9 +261,7 @@ def retrieve_doc_indices(
 
 def prompts_output_name(top_k: int) -> str:
     task_suffix = (
-        f"_{variables.llm_task}"
-        if variables.use_context and variables.llm_task != "route_segments"
-        else ""
+        f"_{variables.llm_task}" if variables.use_context and variables.llm_task != "route_segments" else ""
     )
     return f"{variables.place_name}_prompts_{variables.retrieval_type}_top_{top_k}{task_suffix}"
 
@@ -461,6 +451,9 @@ if __name__ == "__main__":
     with open(test_data_filename, "rb") as f:
         test_data = pickle.load(f)
 
+    if variables.place_name == "chengdu":
+        test_data = test_data[:1_500]
+
     # Extract queries safely
     retriever_queries = []
     llm_query_dicts = []
@@ -506,9 +499,7 @@ if __name__ == "__main__":
             {
                 "query_index": int(i),
                 "retrieved_indices": [int(idx) for idx in final_indices],
-                "retrieved_od_pairs": [
-                    jsonable_od_pair(context_od_pairs[idx]) for idx in final_indices
-                ],
+                "retrieved_od_pairs": [jsonable_od_pair(context_od_pairs[idx]) for idx in final_indices],
             }
         )
         retrieval_metadata.append(query_metadata)

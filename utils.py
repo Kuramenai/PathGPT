@@ -26,7 +26,7 @@ def get_args():
     parser.add_argument("-save_as", default="all_paths_one_doc", type=str)
     parser.add_argument("-path_type", default="fuel_efficient", type=str)
     parser.add_argument("-use-context", default=False, action="store_true")
-    parser.add_argument("-llm", default="qwen2.5-14b", type=str)
+    parser.add_argument("-llm", default="Qwen3-8B", type=str)
     parser.add_argument(
         "-llm_task",
         default="route_segments",
@@ -34,6 +34,7 @@ def get_args():
         help="LLM task for contextual runs: generate route segments or rank retrieved contexts.",
     )
     parser.add_argument("-embedding_model", default="intfloat/multilingual-e5-large-instruct", type=str)
+    parser.add_argument("-top_k_shortest", default=False, action="store_true")
     parser.add_argument("-top_k", default=9, type=int)
     parser.add_argument(
         "-retrieval",
