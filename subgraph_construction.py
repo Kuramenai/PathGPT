@@ -539,15 +539,14 @@ if __name__ == "__main__":
         cprint(f"Train data not found at {data}! Please run generate_custom_dataset.py first.", "red")
         exit(1)
 
-    cprint(f"Loaded {len(data)} test samples from.", "cyan")
+    cprint(f"Loaded {len(data)} train samples from {filtered_train_data}", "cyan")
 
     # Local graph construction and compression below.
 
     # 1. Build the uncompressed subgraphs
     cprint("Constructing raw local subgraphs...", "yellow")
     cprint(
-        f"k-shortest enabled={variables.top_k_shortest}, k={variables.k_shortest}, "
-        f"weight={weight_metric}",
+        f"k-shortest enabled={variables.top_k_shortest}, k={variables.k_shortest}, weight={weight_metric}",
         "cyan",
     )
     uncompressed_subgraphs = construct_local_subgraphs(
