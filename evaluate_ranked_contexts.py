@@ -1,4 +1,5 @@
 import json
+import math
 import pickle
 import re
 from collections import defaultdict
@@ -230,11 +231,98 @@ def search_first_feasible_ranked_corridor(
     return [], None
 
 
+def corridor_route(
+    od_pair: OdPair,
+    uncompressed_subgraphs: Dict[OdPair, Subgraph],
+    edge_weights: Dict[int, float],
+    start_edge: Optional[int],
+    dest_edge: Optional[int],
+) -> List[int]:
+    edge_graph = build_corridor_edge_graph([od_pair], uncompressed_subgraphs, edge_weights)
+    return search_edge_graph(edge_graph, start_edge, dest_edge)
+
+
+def evaluate_corridor(
+    od_pair: OdPair,
+    uncompressed_subgraphs: Dict[OdPair, Subgraph],
+    edge_weights: Dict[int, float],
+    start_edge: Optional[int],
+    dest_edge: Optional[int],
+    ground_truth_edges: List[int],
+) -> Tuple[bool, float]:
+    edge_route = corridor_route(
+        od_pair, uncompressed_subgraphs, edge_weights, start_edge, dest_edge
+    )
+    if not edge_route:
+        return False, 0.0
+    _, recall = calculate_metrics(edge_route, ground_truth_edges)
+    return True, recall
+
+
+def compute_jaccard_similarity(
+    path1: List[int], path2: List[int], edge_lengths: Dict[int, float]
+) -> float:
+    # ponytail: copied from filter_custom_dataset to avoid heavy module imports
+    s1, s2 = set(path1), set(path2)
+    intersection_length = sum(edge_lengths.get(e, 0.0) for e in s1.intersection(s2))
+    union_length = sum(edge_lengths.get(e, 0.0) for e in s1.union(s2))
+    return intersection_length / union_length if union_length > 0 else 0.0
+
+
+def normalized_edit_similarity(path1: List[int], path2: List[int]) -> float:
+    if not path1 and not path2:
+        return 1.0
+    if not path1 or not path2:
+        return 0.0
+
+    n, m = len(path1), len(path2)
+    prev = list(range(m + 1))
+    for i in range(1, n + 1):
+        curr = [i] + [0] * m
+        for j in range(1, m + 1):
+            cost = 0 if path1[i - 1] == path2[j - 1] else 1
+            curr[j] = min(prev[j] + 1, curr[j - 1] + 1, prev[j - 1] + cost)
+        prev = curr
+    return 1.0 - prev[m] / max(n, m)
+
+
+def route_cost(edge_route: List[int], edge_weights: Dict[int, float]) -> float:
+    return sum(edge_weights.get(int(edge_id), 0.0) for edge_id in edge_route)
+
+
+def route_in_search_graph(edge_route: List[int], edge_graph: Optional[nx.DiGraph]) -> bool:
+    if not edge_route or edge_graph is None:
+        return False
+    return all(int(edge_id) in edge_graph for edge_id in edge_route)
+
+
+def dcg(relevances: List[float], k: int) -> float:
+    return sum(rel / math.log2(i + 1) for i, rel in enumerate(relevances[:k], start=1))
+
+
+def ndcg_at_k(ranked_relevances: List[float], all_relevances: List[float], k: int) -> float:
+    dcg_val = dcg(ranked_relevances, k)
+    idcg_val = dcg(sorted(all_relevances, reverse=True), k)
+    return dcg_val / idcg_val if idcg_val > 0 else 0.0
+
+
+def mrr(feasible_flags: List[bool]) -> float:
+    for rank, is_feasible in enumerate(feasible_flags, start=1):
+        if is_feasible:
+            return 1.0 / rank
+    return 0.0
+
+
+def success_at_k(feasible_flags: List[bool], k: int) -> float:
+    return 1.0 if any(feasible_flags[:k]) else 0.0
+
+
 @dataclass
 class StrategyResult:
     edge_route: List[int] = field(default_factory=list)
     source: str = "none"
     selected_od_pair: Optional[OdPair] = None
+    search_graph: Optional[nx.DiGraph] = None
 
 
 @dataclass
@@ -243,8 +331,12 @@ class StrategyStats:
     edge_recalls: List[float] = field(default_factory=list)
     road_precisions: List[float] = field(default_factory=list)
     road_recalls: List[float] = field(default_factory=list)
+    jaccard_scores: List[float] = field(default_factory=list)
+    edit_similarities: List[float] = field(default_factory=list)
+    cost_ratios: List[float] = field(default_factory=list)
     generated_count: int = 0
     topology_valid_count: int = 0
+    valid_in_graph_count: int = 0
     route_lengths: List[int] = field(default_factory=list)
 
     def add(
@@ -254,12 +346,17 @@ class StrategyStats:
         ground_truth_route: List[str],
         edge_id_to_name: Dict[int, str],
         edge_id_to_uvk: Dict[int, tuple],
+        edge_weights: Dict[int, float],
+        edge_lengths: Dict[int, float],
+        search_graph: Optional[nx.DiGraph],
     ) -> None:
         if edge_route:
             self.generated_count += 1
             self.route_lengths.append(len(edge_route))
             if check_directed_edge_connectivity(edge_route, edge_id_to_uvk):
                 self.topology_valid_count += 1
+            if route_in_search_graph(edge_route, search_graph):
+                self.valid_in_graph_count += 1
 
         predicted_route = edge_ids_to_road_names(edge_route, edge_id_to_name)
         edge_p, edge_r = calculate_metrics(edge_route, ground_truth_edges)
@@ -269,6 +366,17 @@ class StrategyStats:
         self.edge_recalls.append(edge_r)
         self.road_precisions.append(road_p)
         self.road_recalls.append(road_r)
+
+        if edge_route and ground_truth_edges:
+            self.jaccard_scores.append(
+                compute_jaccard_similarity(edge_route, ground_truth_edges, edge_lengths)
+            )
+            self.edit_similarities.append(
+                normalized_edit_similarity(edge_route, ground_truth_edges)
+            )
+            gt_cost = route_cost(ground_truth_edges, edge_weights)
+            if gt_cost > 0:
+                self.cost_ratios.append(route_cost(edge_route, edge_weights) / gt_cost)
 
     def summary(self, total_samples: int) -> dict:
         return {
@@ -281,11 +389,54 @@ class StrategyStats:
             "topology_valid_rate_on_generated": (
                 self.topology_valid_count / self.generated_count if self.generated_count else 0.0
             ),
+            "valid_in_graph": self.valid_in_graph_count,
+            "valid_in_graph_rate": (
+                self.valid_in_graph_count / total_samples if total_samples else 0.0
+            ),
+            "valid_in_graph_rate_on_generated": (
+                self.valid_in_graph_count / self.generated_count if self.generated_count else 0.0
+            ),
             "edge_precision": float(np.mean(self.edge_precisions)) if self.edge_precisions else 0.0,
             "edge_recall": float(np.mean(self.edge_recalls)) if self.edge_recalls else 0.0,
             "road_precision": float(np.mean(self.road_precisions)) if self.road_precisions else 0.0,
             "road_recall": float(np.mean(self.road_recalls)) if self.road_recalls else 0.0,
+            "jaccard": float(np.mean(self.jaccard_scores)) if self.jaccard_scores else 0.0,
+            "edit_similarity": (
+                float(np.mean(self.edit_similarities)) if self.edit_similarities else 0.0
+            ),
+            "cost_ratio": float(np.mean(self.cost_ratios)) if self.cost_ratios else 0.0,
             "avg_route_edges": float(np.mean(self.route_lengths)) if self.route_lengths else 0.0,
+        }
+
+
+@dataclass
+class RetrievalStats:
+    mrr_scores: List[float] = field(default_factory=list)
+    success_at: Dict[int, List[float]] = field(default_factory=dict)
+    ndcg_scores: List[float] = field(default_factory=list)
+
+    def add(
+        self,
+        ranked_feasible: List[bool],
+        ranked_relevances: List[float],
+        all_relevances: List[float],
+        k_values: List[int],
+        top_k: int,
+    ) -> None:
+        self.mrr_scores.append(mrr(ranked_feasible))
+        self.ndcg_scores.append(ndcg_at_k(ranked_relevances, all_relevances, top_k))
+        for k in k_values:
+            self.success_at.setdefault(k, []).append(success_at_k(ranked_feasible, k))
+
+    def summary(self, top_k: int) -> dict:
+        success_summary = {
+            f"success@{k}": float(np.mean(scores)) if scores else 0.0
+            for k, scores in sorted(self.success_at.items())
+        }
+        return {
+            "mrr": float(np.mean(self.mrr_scores)) if self.mrr_scores else 0.0,
+            **success_summary,
+            f"ndcg@{top_k}": float(np.mean(self.ndcg_scores)) if self.ndcg_scores else 0.0,
         }
 
 
@@ -319,6 +470,43 @@ def print_strategy_summary(strategy_name: str, summary: dict, total_samples: int
         "cyan",
     )
     print(f"Average route length: {summary['avg_route_edges']:.2f} edges")
+    cprint(
+        f"Jaccard / Edit similarity: {summary['jaccard'] * 100:.2f} / "
+        f"{summary['edit_similarity'] * 100:.2f}",
+        "cyan",
+    )
+    cprint(f"Cost ratio (pred/gt): {summary['cost_ratio']:.3f}", "cyan")
+    print(
+        f"Valid in search graph: {summary['valid_in_graph']}/{total_samples} "
+        f"({summary['valid_in_graph_rate'] * 100:.2f}% of all, "
+        f"{summary['valid_in_graph_rate_on_generated'] * 100:.2f}% of generated)"
+    )
+
+
+def print_retrieval_summary(retrieval_summary: dict) -> None:
+    cprint("\nRetrieval ranking (LLM ranked contexts)", "green", attrs=["bold"])
+    print(f"MRR: {retrieval_summary['mrr'] * 100:.2f}%")
+    for key, value in retrieval_summary.items():
+        if key.startswith("success@"):
+            print(f"{key}: {value * 100:.2f}%")
+    for key, value in retrieval_summary.items():
+        if key.startswith("ndcg@"):
+            print(f"{key}: {value * 100:.4f}")
+
+
+def print_cascade_fallback_summary(cascade_fallback: dict) -> None:
+    cprint("\nCascade fallback (cascade_ranked_union_full)", "green", attrs=["bold"])
+    for source, rate in cascade_fallback.items():
+        print(f"{source}: {rate * 100:.2f}%")
+
+
+def _self_check() -> None:
+    assert normalized_edit_similarity([1, 2, 3], [1, 2, 3]) == 1.0
+    assert normalized_edit_similarity([1, 2], [3, 4]) == 0.0
+    assert compute_jaccard_similarity([1, 2], [2, 3], {1: 1.0, 2: 1.0, 3: 1.0}) == 1 / 3
+    assert mrr([False, True, True]) == 0.5
+    assert success_at_k([False, False, True], 2) == 0.0
+    assert ndcg_at_k([1.0, 0.0], [1.0, 0.0], 2) == 1.0
 
 
 def evaluate_ranked_contexts() -> None:
@@ -356,9 +544,13 @@ def evaluate_ranked_contexts() -> None:
     edges_df = gpd.read_file(variables.EDGE_DATA)
     weight_column = choose_weight_column(edges_df)
     edge_weights = build_edge_weights(edges_df, weight_column)
+    length_column = "length" if "length" in edges_df.columns else weight_column
+    edge_lengths = build_edge_weights(edges_df, length_column)
     edge_id_to_name = build_edge_id_to_name(edges_df)
     edge_id_to_uvk = build_edge_id_to_uvk(edges_df)
     full_edge_graph = build_full_edge_transition_graph(edges_df, edge_weights)
+    top_k = variables.number_of_docs_to_retrieve
+    success_k_values = sorted({k for k in (1, 3, 5, top_k) if k > 0})
     cprint(f"Using edge search weight column: {weight_column}", "cyan")
 
     strategy_stats = {
@@ -367,6 +559,8 @@ def evaluate_ranked_contexts() -> None:
         "full_graph": StrategyStats(),
         "cascade_ranked_union_full": StrategyStats(),
     }
+    retrieval_stats = RetrievalStats()
+    cascade_fallback_counts: Dict[str, int] = defaultdict(int)
     samples = []
     valid_json_count = 0
     non_empty_rank_count = 0
@@ -409,25 +603,74 @@ def evaluate_ranked_contexts() -> None:
             if full_route
             else "none"
         )
+        cascade_fallback_counts[cascade_source] += 1
+
+        first_graph = (
+            build_corridor_edge_graph([selected_od_pair], uncompressed_subgraphs, edge_weights)
+            if selected_od_pair
+            else None
+        )
+
+        corridor_evaluations = [
+            evaluate_corridor(
+                od_pair,
+                uncompressed_subgraphs,
+                edge_weights,
+                start_edge,
+                dest_edge,
+                ground_truth_edges,
+            )
+            for od_pair in retrieved_pairs
+        ]
+        ranked_evaluations = [
+            evaluate_corridor(
+                od_pair,
+                uncompressed_subgraphs,
+                edge_weights,
+                start_edge,
+                dest_edge,
+                ground_truth_edges,
+            )
+            for od_pair in ranked_pairs
+        ]
+        retrieval_stats.add(
+            ranked_feasible=[feasible for feasible, _ in ranked_evaluations],
+            ranked_relevances=[recall for _, recall in ranked_evaluations],
+            all_relevances=[recall for _, recall in corridor_evaluations],
+            k_values=success_k_values,
+            top_k=top_k,
+        )
 
         strategy_results = {
             "ranked_first_feasible_corridor": StrategyResult(
                 edge_route=first_route,
                 source="ranked_first_feasible_corridor" if first_route else "none",
                 selected_od_pair=selected_od_pair,
+                search_graph=first_graph,
             ),
             "retrieved_top_k_union": StrategyResult(
                 edge_route=union_route,
                 source="retrieved_top_k_union" if union_route else "none",
+                search_graph=union_graph,
             ),
             "full_graph": StrategyResult(
                 edge_route=full_route,
                 source="full_graph" if full_route else "none",
+                search_graph=full_edge_graph,
             ),
             "cascade_ranked_union_full": StrategyResult(
                 edge_route=cascade_route,
                 source=cascade_source,
                 selected_od_pair=selected_od_pair if first_route else None,
+                search_graph=(
+                    first_graph
+                    if first_route
+                    else union_graph
+                    if union_route
+                    else full_edge_graph
+                    if full_route
+                    else None
+                ),
             ),
         }
 
@@ -438,6 +681,9 @@ def evaluate_ranked_contexts() -> None:
                 ground_truth_route,
                 edge_id_to_name,
                 edge_id_to_uvk,
+                edge_weights,
+                edge_lengths,
+                result.search_graph,
             )
 
         samples.append(
@@ -466,11 +712,19 @@ def evaluate_ranked_contexts() -> None:
         strategy_name: stats.summary(total_samples)
         for strategy_name, stats in strategy_stats.items()
     }
+    retrieval_summary = retrieval_stats.summary(top_k)
+    cascade_fallback = {
+        source: count / total_samples if total_samples else 0.0
+        for source, count in sorted(cascade_fallback_counts.items())
+    }
 
     cprint(f"\nResults for {variables.place_name} ({variables.path_type})", "green", attrs=["bold"])
     print(f"Total Samples Tested: {total_samples}")
     print(f"Valid Ranked-Context JSON: {valid_json_count}/{total_samples}")
     print(f"Non-empty Ranked Contexts: {non_empty_rank_count}/{total_samples}")
+    print("-" * 30)
+    print_retrieval_summary(retrieval_summary)
+    print_cascade_fallback_summary(cascade_fallback)
     print("-" * 30)
     for strategy_name, summary in summaries.items():
         print_strategy_summary(strategy_name, summary, total_samples)
@@ -492,6 +746,8 @@ def evaluate_ranked_contexts() -> None:
                 "total_samples": total_samples,
                 "valid_ranked_context_json": valid_json_count,
                 "non_empty_ranked_contexts": non_empty_rank_count,
+                "retrieval_summary": retrieval_summary,
+                "cascade_fallback": cascade_fallback,
                 "summaries": summaries,
                 "samples": samples,
             },
@@ -503,4 +759,5 @@ def evaluate_ranked_contexts() -> None:
 
 
 if __name__ == "__main__":
+    _self_check()
     evaluate_ranked_contexts()
