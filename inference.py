@@ -6,7 +6,7 @@ from termcolor import cprint
 from tqdm import tqdm
 from pathlib import Path
 from utils import TimeoutException, timeout_handler, make_dir
-from prompt_generation import welcome_text
+from prompt_generation import prompts_output_name, welcome_text
 from vllm import LLM, SamplingParams
 from transformers import AutoTokenizer
 
@@ -17,6 +17,19 @@ except ImportError:
 
 
 def get_output_json_schema() -> dict:
+    if variables.use_context and variables.llm_task == "rank_contexts":
+        return {
+            "type": "object",
+            "properties": {
+                "ranked_contexts": {
+                    "type": "array",
+                    "items": {"type": "integer", "minimum": 1},
+                }
+            },
+            "required": ["ranked_contexts"],
+            "additionalProperties": False,
+        }
+
     if variables.use_context:
         return {
             "type": "object",
@@ -41,6 +54,21 @@ def get_output_json_schema() -> dict:
         "required": ["route"],
         "additionalProperties": False,
     }
+
+
+def generated_output_name() -> str:
+    if variables.use_context:
+        task_suffix = (
+            f"_{variables.llm_task}"
+            if variables.llm_task != "route_segments"
+            else ""
+        )
+        return (
+            f"{variables.retrieval_type}_context_{variables.place_name}_top_"
+            f"{variables.number_of_docs_to_retrieve}{task_suffix}"
+        )
+
+    return f"no_context_{variables.place_name}_top_{variables.number_of_docs_to_retrieve}"
 
 
 def build_sampling_params() -> SamplingParams:
@@ -85,11 +113,7 @@ if __name__ == "__main__":
     number_of_documents_to_retrieve = variables.number_of_docs_to_retrieve
 
     try:
-        with open(
-            prompts_filepath
-            + f"{variables.place_name}_prompts_{variables.retrieval_type}_top_{number_of_documents_to_retrieve}",
-            "rb",
-        ) as f:
+        with open(prompts_filepath + prompts_output_name(number_of_documents_to_retrieve), "rb") as f:
             prompts = pickle.load(f)
     except FileNotFoundError:
         cprint(f"Prompts not found at {prompts_filepath}. Please run prompt_generation.py first.", "red")
@@ -118,10 +142,7 @@ if __name__ == "__main__":
         results.append(generated_text)
 
     file_path = f"generated_paths/{variables.path_type}/"
-    if variables.use_context:
-        file_name = f"{variables.retrieval_type}_context_{variables.place_name}_top_{variables.number_of_docs_to_retrieve}"
-    else:
-        file_name = f"no_context_{variables.place_name}_top_{variables.number_of_docs_to_retrieve}"
+    file_name = generated_output_name()
 
     make_dir(file_path)
     with open(file_path + file_name, "wb") as f:

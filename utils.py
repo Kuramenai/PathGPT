@@ -27,13 +27,40 @@ def get_args():
     parser.add_argument("-path_type", default="fuel_efficient", type=str)
     parser.add_argument("-use-context", default=False, action="store_true")
     parser.add_argument("-llm", default="qwen2.5-14b", type=str)
+    parser.add_argument(
+        "-llm_task",
+        default="route_segments",
+        choices=["route_segments", "rank_contexts"],
+        help="LLM task for contextual runs: generate route segments or rank retrieved contexts.",
+    )
     parser.add_argument("-embedding_model", default="intfloat/multilingual-e5-large-instruct", type=str)
     parser.add_argument("-top_k", default=9, type=int)
     parser.add_argument(
         "-retrieval",
         default="hybrid",
-        choices=["bm25", "semantic", "hybrid"],
-        help="Retrieval mode: bm25, semantic, or hybrid (BM25 filter + semantic rerank).",
+        choices=["bm25", "semantic", "hybrid", "spatial_hybrid"],
+        help=(
+            "Retrieval mode: bm25, semantic, hybrid (BM25 filter + semantic rerank), "
+            "or spatial_hybrid (spatial/BM25 filter + semantic rerank)."
+        ),
+    )
+    parser.add_argument(
+        "-spatial_candidate_k",
+        default=100,
+        type=int,
+        help="First-stage candidate count for spatial_hybrid retrieval.",
+    )
+    parser.add_argument(
+        "-spatial_weight",
+        default=0.5,
+        type=float,
+        help="First-stage spatial weight for spatial_hybrid retrieval.",
+    )
+    parser.add_argument(
+        "-bm25_weight",
+        default=0.5,
+        type=float,
+        help="First-stage BM25 weight for spatial_hybrid retrieval.",
     )
     parser.add_argument("-reset", action="store_true", help="Reset the database.")
     parser.add_argument("-evaluation_remarks", default="", type=str)

@@ -16,12 +16,16 @@ map_path_type = {
 save_as = args.save_as
 use_context = args.use_context
 llm = args.llm
+llm_task = args.llm_task
 embedding_model = args.embedding_model
 embedding_model_formatted_name = embedding_model.split("/")[1]
 model_kwargs = {"device": "cuda"}
 encode_kwargs = {"normalize_embeddings": True}
 number_of_docs_to_retrieve = args.top_k
 retrieval_type = args.retrieval
+spatial_candidate_k = args.spatial_candidate_k
+spatial_weight = args.spatial_weight
+bm25_weight = args.bm25_weight
 evaluation_remarks = args.evaluation_remarks
 
 # fmt: off
