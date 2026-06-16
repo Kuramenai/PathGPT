@@ -20,6 +20,7 @@ from evaluate_single import (
     edge_ids_to_road_names,
     safe_float,
 )
+from generate_custom_dataset import apply_poi_aware_weights, load_graph
 from utils import make_dir
 
 
@@ -85,19 +86,15 @@ def get_ground_truth_edges(path_collection: dict) -> List[int]:
     return [int(edge_id) for edge_id in edge_path]
 
 
-def choose_weight_column(edges_df: gpd.GeoDataFrame) -> str:
-    candidates_by_task = {
-        "fastest": ["travel_time", "time", "length"],
-        "shortest": ["length"],
-        "fuel_efficient": ["fuel_cost", "length"],
-        "poi_aware": ["touristic_value", "length"],
-        "scenic": ["touristic_value", "length"],
-        "highway_free": ["fuel_cost", "length"],
-    }
-    for column in candidates_by_task.get(variables.path_type, ["length"]):
-        if column in edges_df.columns:
-            return column
-    return "length"
+def task_weight_column(path_type: str) -> str:
+    return {
+        "fastest": "travel_time",
+        "shortest": "length",
+        "fuel_efficient": "fuel_cost",
+        "highway_free": "fuel_cost",
+        "poi_aware": "touristic_value",
+        "scenic": "touristic_value",
+    }.get(path_type, "length")
 
 
 def build_edge_weights(edges_df: gpd.GeoDataFrame, weight_column: str) -> Dict[int, float]:
@@ -105,6 +102,116 @@ def build_edge_weights(edges_df: gpd.GeoDataFrame, weight_column: str) -> Dict[i
     for edge_id, row in edges_df.iterrows():
         edge_weights[int(edge_id)] = safe_float(row.get(weight_column, 1.0))
     return edge_weights
+
+
+def build_task_edge_weights(
+    edges_df: gpd.GeoDataFrame,
+    edge_id_to_uvk: Dict[int, tuple],
+    graph: nx.MultiDiGraph,
+    weight_column: str,
+) -> Tuple[Dict[int, float], dict]:
+    edge_weights: Dict[int, float] = {}
+    graph_hits = 0
+    shapefile_hits = 0
+    fallback_hits = 0
+    shapefile_has_column = weight_column in edges_df.columns
+
+    for edge_id, row in edges_df.iterrows():
+        edge_id = int(edge_id)
+        weight: Optional[float] = None
+        source = "fallback"
+
+        uvk = edge_id_to_uvk.get(edge_id)
+        if uvk is not None:
+            edge_data = graph.get_edge_data(uvk[0], uvk[1], uvk[2], default={}) or {}
+            if weight_column in edge_data:
+                candidate = safe_float(edge_data[weight_column])
+                if candidate > 0:
+                    weight = candidate
+                    source = "graph"
+
+        if weight is None and shapefile_has_column:
+            candidate = safe_float(row.get(weight_column))
+            if candidate > 0:
+                weight = candidate
+                source = "shapefile"
+
+        if weight is None:
+            weight = safe_float(row.get("length", 1.0))
+            source = "shapefile" if weight_column == "length" else "fallback"
+
+        edge_weights[edge_id] = weight
+        if source == "graph":
+            graph_hits += 1
+        elif source == "shapefile":
+            shapefile_hits += 1
+        else:
+            fallback_hits += 1
+
+    return edge_weights, {
+        "weight_column": weight_column,
+        "graph_hits": graph_hits,
+        "shapefile_hits": shapefile_hits,
+        "fallback_hits": fallback_hits,
+        "total_edges": len(edge_weights),
+    }
+
+
+def print_weight_source(weight_meta: dict, path_type: str) -> None:
+    cprint(
+        f"Task weight column: {weight_meta['weight_column']} (path_type={path_type})",
+        "cyan",
+    )
+    cprint(
+        "Weight sources: "
+        f"graph={weight_meta['graph_hits']}, "
+        f"shapefile={weight_meta['shapefile_hits']}, "
+        f"length_fallback={weight_meta['fallback_hits']} / "
+        f"{weight_meta['total_edges']}",
+        "cyan",
+    )
+    if weight_meta["fallback_hits"] > 0 and path_type != "shortest":
+        cprint(
+            f"WARNING: {weight_meta['fallback_hits']} edges fell back to length for "
+            f"{path_type} graph search.",
+            "yellow",
+        )
+    if weight_meta["graph_hits"] == 0 and path_type not in ("shortest",):
+        cprint(
+            f"WARNING: no graph weights found for '{weight_meta['weight_column']}'. "
+            "Re-run generate_custom_dataset or subgraph_construction.",
+            "yellow",
+        )
+
+
+def subgraph_edge_set(subgraph: Subgraph) -> set:
+    edge_ids = {int(edge_id) for edge_id in subgraph}
+    for next_edges in subgraph.values():
+        edge_ids.update(int(next_edge) for next_edge in next_edges)
+    return edge_ids
+
+
+def retrieved_union_edge_set(
+    retrieved_pairs: List[OdPair],
+    uncompressed_subgraphs: Dict[OdPair, Subgraph],
+) -> set:
+    edge_ids: set = set()
+    for od_pair in retrieved_pairs:
+        subgraph = uncompressed_subgraphs.get(od_pair)
+        if subgraph:
+            edge_ids.update(subgraph_edge_set(subgraph))
+    return edge_ids
+
+
+def ground_truth_in_retrieved_union(
+    ground_truth_edges: List[int],
+    retrieved_pairs: List[OdPair],
+    uncompressed_subgraphs: Dict[OdPair, Subgraph],
+) -> bool:
+    if not ground_truth_edges:
+        return False
+    union_edges = retrieved_union_edge_set(retrieved_pairs, uncompressed_subgraphs)
+    return all(int(edge_id) in union_edges for edge_id in ground_truth_edges)
 
 
 def add_subgraph_to_edge_graph(
@@ -502,6 +609,16 @@ def _self_check() -> None:
     assert success_at_k([False, False, True], 2) == 0.0
     assert ndcg_at_k([1.0, 0.0], [1.0, 0.0], 2) == 1.0
 
+    graph = nx.MultiDiGraph()
+    graph.add_edge(1, 2, 0, travel_time=12.0, length=100.0)
+    graph.add_edge(2, 3, 0, length=50.0)
+    edges_df = gpd.GeoDataFrame({"length": [100.0, 50.0]}, index=[0, 1])
+    edge_id_to_uvk = {0: (1, 2, 0), 1: (2, 3, 0)}
+    weights, meta = build_task_edge_weights(edges_df, edge_id_to_uvk, graph, "travel_time")
+    assert weights[0] == 12.0
+    assert meta["graph_hits"] == 1
+    assert meta["fallback_hits"] == 1
+
 
 def evaluate_ranked_contexts() -> None:
     cprint("\n--- STARTING RANKED-CONTEXT EVALUATION ---", "yellow", attrs=["bold"])
@@ -539,16 +656,24 @@ def evaluate_ranked_contexts() -> None:
 
     cprint("Loading edge data and building search graphs...", "yellow")
     edges_df = gpd.read_file(variables.EDGE_DATA)
-    weight_column = choose_weight_column(edges_df)
-    edge_weights = build_edge_weights(edges_df, weight_column)
-    length_column = "length" if "length" in edges_df.columns else weight_column
-    edge_lengths = build_edge_weights(edges_df, length_column)
     edge_id_to_name = build_edge_id_to_name(edges_df)
     edge_id_to_uvk = build_edge_id_to_uvk(edges_df)
+
+    cprint("Loading pickled graph for task-specific edge weights...", "yellow")
+    graph = load_graph(fname=variables.PICKLED_GRAPH)
+    if variables.path_type in ("poi_aware", "scenic"):
+        apply_poi_aware_weights(graph, edges_df)
+
+    weight_column = task_weight_column(variables.path_type)
+    edge_weights, weight_meta = build_task_edge_weights(
+        edges_df, edge_id_to_uvk, graph, weight_column
+    )
+    length_column = "length" if "length" in edges_df.columns else weight_column
+    edge_lengths = build_edge_weights(edges_df, length_column)
     full_edge_graph = build_full_edge_transition_graph(edges_df, edge_weights)
     top_k = variables.number_of_docs_to_retrieve
     success_k_values = sorted({k for k in (1, 3, 5, top_k) if k > 0})
-    cprint(f"Using edge search weight column: {weight_column}", "cyan")
+    print_weight_source(weight_meta, variables.path_type)
 
     strategy_stats = {
         "ranked_first_feasible_corridor": StrategyStats(),
@@ -558,6 +683,7 @@ def evaluate_ranked_contexts() -> None:
     }
     retrieval_stats = RetrievalStats()
     cascade_fallback_counts: Dict[str, int] = defaultdict(int)
+    gt_in_retrieved_union_count = 0
     samples = []
     valid_json_count = 0
     non_empty_rank_count = 0
@@ -574,6 +700,10 @@ def evaluate_ranked_contexts() -> None:
 
         ranked_context_ids, ranked_pairs = ranked_od_pairs(raw_text, query_metadata)
         retrieved_pairs = retrieved_od_pairs(query_metadata)
+        if ground_truth_in_retrieved_union(
+            ground_truth_edges, retrieved_pairs, uncompressed_subgraphs
+        ):
+            gt_in_retrieved_union_count += 1
         if has_ranked_contexts_json(raw_text):
             valid_json_count += 1
         if ranked_context_ids:
@@ -713,11 +843,24 @@ def evaluate_ranked_contexts() -> None:
         source: count / total_samples if total_samples else 0.0
         for source, count in sorted(cascade_fallback_counts.items())
     }
+    gt_in_retrieved_union_rate = (
+        gt_in_retrieved_union_count / total_samples if total_samples else 0.0
+    )
 
     cprint(f"\nResults for {variables.place_name} ({variables.path_type})", "green", attrs=["bold"])
     print(f"Total Samples Tested: {total_samples}")
     print(f"Valid Ranked-Context JSON: {valid_json_count}/{total_samples}")
     print(f"Non-empty Ranked Contexts: {non_empty_rank_count}/{total_samples}")
+    print(
+        f"GT fully in retrieved union: {gt_in_retrieved_union_count}/{total_samples} "
+        f"({gt_in_retrieved_union_rate * 100:.2f}%)"
+    )
+    if gt_in_retrieved_union_rate < 0.5:
+        cprint(
+            "WARNING: ground-truth routes are often missing from retrieved corridor unions. "
+            "Similarity metrics may stay low even with correct task weights.",
+            "yellow",
+        )
     print("-" * 30)
     print_retrieval_summary(retrieval_summary)
     print_cascade_fallback_summary(cascade_fallback)
@@ -739,6 +882,8 @@ def evaluate_ranked_contexts() -> None:
                 "retrieval_type": variables.retrieval_type,
                 "top_k": variables.number_of_docs_to_retrieve,
                 "weight_column": weight_column,
+                "weight_source": weight_meta,
+                "gt_in_retrieved_union_rate": gt_in_retrieved_union_rate,
                 "total_samples": total_samples,
                 "valid_ranked_context_json": valid_json_count,
                 "non_empty_ranked_contexts": non_empty_rank_count,
