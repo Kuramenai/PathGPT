@@ -261,6 +261,123 @@ def build_full_edge_transition_graph(
     return edge_graph
 
 
+def add_edge_route_to_graph(
+    edge_graph: nx.DiGraph,
+    full_edge_graph: nx.DiGraph,
+    edge_route: List[int],
+) -> None:
+    if not edge_route:
+        return
+
+    for edge_id in edge_route:
+        edge_graph.add_node(int(edge_id))
+
+    for prev_edge, next_edge in zip(edge_route, edge_route[1:]):
+        prev_edge = int(prev_edge)
+        next_edge = int(next_edge)
+        edge_graph.add_node(next_edge)
+        if full_edge_graph.has_edge(prev_edge, next_edge):
+            edge_graph.add_edge(prev_edge, next_edge, **full_edge_graph.edges[prev_edge, next_edge])
+
+
+def shortest_path_to_targets(
+    full_edge_graph: nx.DiGraph,
+    source_edge: Optional[int],
+    target_edges: set,
+) -> List[int]:
+    if source_edge is None or not target_edges:
+        return []
+
+    source_edge = int(source_edge)
+    if source_edge not in full_edge_graph:
+        return []
+    if source_edge in target_edges:
+        return [source_edge]
+
+    try:
+        distances, paths = nx.single_source_dijkstra(full_edge_graph, source_edge, weight="weight")
+    except nx.NodeNotFound:
+        return []
+    best_target = None
+    best_distance = float("inf")
+    for target_edge in target_edges:
+        target_edge = int(target_edge)
+        distance = distances.get(target_edge)
+        if distance is not None and distance < best_distance:
+            best_distance = distance
+            best_target = target_edge
+
+    if best_target is None:
+        return []
+    return [int(edge_id) for edge_id in paths[best_target]]
+
+
+def shortest_path_from_targets_to_dest(
+    full_edge_graph: nx.DiGraph,
+    source_edges: set,
+    dest_edge: Optional[int],
+) -> List[int]:
+    if dest_edge is None or not source_edges:
+        return []
+
+    dest_edge = int(dest_edge)
+    if dest_edge in source_edges:
+        return [dest_edge]
+
+    best_route: Optional[List[int]] = None
+    best_cost = float("inf")
+    for source_edge in source_edges:
+        route = search_edge_graph(full_edge_graph, int(source_edge), dest_edge)
+        if not route:
+            continue
+        cost = sum(full_edge_graph[u][v]["weight"] for u, v in zip(route, route[1:]))
+        if cost < best_cost:
+            best_cost = cost
+            best_route = route
+
+    return [int(edge_id) for edge_id in best_route] if best_route else []
+
+
+def build_bridged_corridor_graph(
+    corridor_graph: nx.DiGraph,
+    full_edge_graph: nx.DiGraph,
+    start_edge: Optional[int],
+    dest_edge: Optional[int],
+) -> nx.DiGraph:
+    # Attach query start/dest to the retrieved corridor via full-network shortest connectors.
+    # Only the original corridor can be used as the bridge target/source; connector edges
+    # must not become new exit sources, otherwise this degenerates into full-graph search.
+    if start_edge is None or dest_edge is None:
+        return corridor_graph.copy()
+
+    bridged = corridor_graph.copy()
+    original_corridor_nodes = {int(node) for node in bridged.nodes}
+
+    entry_route = shortest_path_to_targets(full_edge_graph, start_edge, original_corridor_nodes)
+    if entry_route:
+        add_edge_route_to_graph(bridged, full_edge_graph, entry_route)
+    else:
+        bridged.add_node(int(start_edge))
+
+    if int(start_edge) in bridged:
+        reachable_nodes = nx.descendants(bridged, int(start_edge)) | {int(start_edge)}
+        exit_source_nodes = original_corridor_nodes & reachable_nodes
+    else:
+        exit_source_nodes = set()
+
+    exit_route = shortest_path_from_targets_to_dest(
+        full_edge_graph,
+        exit_source_nodes,
+        dest_edge,
+    )
+    if exit_route:
+        add_edge_route_to_graph(bridged, full_edge_graph, exit_route)
+    else:
+        bridged.add_node(int(dest_edge))
+
+    return bridged
+
+
 def search_edge_graph(
     edge_graph: nx.DiGraph,
     start_edge: Optional[int],
@@ -399,7 +516,14 @@ def route_cost(edge_route: List[int], edge_weights: Dict[int, float]) -> float:
 def route_in_search_graph(edge_route: List[int], edge_graph: Optional[nx.DiGraph]) -> bool:
     if not edge_route or edge_graph is None:
         return False
-    return all(int(edge_id) in edge_graph for edge_id in edge_route)
+
+    normalized_route = [int(edge_id) for edge_id in edge_route]
+    if not all(edge_id in edge_graph for edge_id in normalized_route):
+        return False
+    return all(
+        edge_graph.has_edge(prev_edge, next_edge)
+        for prev_edge, next_edge in zip(normalized_route, normalized_route[1:])
+    )
 
 
 def dcg(relevances: List[float], k: int) -> float:
@@ -596,7 +720,7 @@ def print_retrieval_summary(retrieval_summary: dict) -> None:
 
 
 def print_cascade_fallback_summary(cascade_fallback: dict) -> None:
-    cprint("\nCascade fallback (cascade_ranked_union_full)", "green", attrs=["bold"])
+    cprint("\nCascade fallback (cascade_ranked_union_bridged_full)", "green", attrs=["bold"])
     for source, rate in cascade_fallback.items():
         print(f"{source}: {rate * 100:.2f}%")
 
@@ -618,6 +742,26 @@ def _self_check() -> None:
     assert weights[0] == 12.0
     assert meta["graph_hits"] == 1
     assert meta["fallback_hits"] == 1
+
+    corridor = nx.DiGraph()
+    corridor.add_edge(10, 20, weight=1.0)
+    full = nx.DiGraph()
+    full.add_edge(1, 10, weight=1.0)
+    full.add_edge(10, 20, weight=1.0)
+    full.add_edge(20, 99, weight=1.0)
+    bridged = build_bridged_corridor_graph(corridor, full, 1, 99)
+    assert search_edge_graph(bridged, 1, 99) == [1, 10, 20, 99]
+
+    corridor = nx.DiGraph()
+    corridor.add_edge(10, 20, weight=1.0)
+    full = nx.DiGraph()
+    full.add_edge(1, 5, weight=1.0)
+    full.add_edge(5, 10, weight=1.0)
+    full.add_edge(5, 99, weight=1.0)
+    full.add_edge(10, 20, weight=1.0)
+    full.add_edge(20, 99, weight=1.0)
+    bridged = build_bridged_corridor_graph(corridor, full, 1, 99)
+    assert search_edge_graph(bridged, 1, 99) == [1, 5, 10, 20, 99]
 
 
 def evaluate_ranked_contexts() -> None:
@@ -678,8 +822,9 @@ def evaluate_ranked_contexts() -> None:
     strategy_stats = {
         "ranked_first_feasible_corridor": StrategyStats(),
         "retrieved_top_k_union": StrategyStats(),
+        "retrieved_top_k_union_bridged": StrategyStats(),
         "full_graph": StrategyStats(),
-        "cascade_ranked_union_full": StrategyStats(),
+        "cascade_ranked_union_bridged_full": StrategyStats(),
     }
     retrieval_stats = RetrievalStats()
     cascade_fallback_counts: Dict[str, int] = defaultdict(int)
@@ -719,17 +864,27 @@ def evaluate_ranked_contexts() -> None:
 
         union_graph = build_corridor_edge_graph(retrieved_pairs, uncompressed_subgraphs, edge_weights)
         union_route = search_edge_graph(union_graph, start_edge, dest_edge)
-        full_route = search_edge_graph(full_edge_graph, start_edge, dest_edge)
-        cascade_route = first_route or union_route or full_route
-        cascade_source = (
-            "ranked_first_feasible_corridor"
-            if first_route
-            else "retrieved_top_k_union"
-            if union_route
-            else "full_graph"
-            if full_route
-            else "none"
+        bridged_union_graph = build_bridged_corridor_graph(
+            union_graph, full_edge_graph, start_edge, dest_edge
         )
+        bridged_union_route = search_edge_graph(bridged_union_graph, start_edge, dest_edge)
+        full_route = search_edge_graph(full_edge_graph, start_edge, dest_edge)
+
+        if first_route:
+            cascade_route = first_route
+            cascade_source = "ranked_first_feasible_corridor"
+        elif union_route:
+            cascade_route = union_route
+            cascade_source = "retrieved_top_k_union"
+        elif bridged_union_route:
+            cascade_route = bridged_union_route
+            cascade_source = "retrieved_top_k_union_bridged"
+        elif full_route:
+            cascade_route = full_route
+            cascade_source = "full_graph"
+        else:
+            cascade_route = []
+            cascade_source = "none"
         cascade_fallback_counts[cascade_source] += 1
 
         first_graph = (
@@ -780,12 +935,17 @@ def evaluate_ranked_contexts() -> None:
                 source="retrieved_top_k_union" if union_route else "none",
                 search_graph=union_graph,
             ),
+            "retrieved_top_k_union_bridged": StrategyResult(
+                edge_route=bridged_union_route,
+                source="retrieved_top_k_union_bridged" if bridged_union_route else "none",
+                search_graph=bridged_union_graph,
+            ),
             "full_graph": StrategyResult(
                 edge_route=full_route,
                 source="full_graph" if full_route else "none",
                 search_graph=full_edge_graph,
             ),
-            "cascade_ranked_union_full": StrategyResult(
+            "cascade_ranked_union_bridged_full": StrategyResult(
                 edge_route=cascade_route,
                 source=cascade_source,
                 selected_od_pair=selected_od_pair if first_route else None,
@@ -794,6 +954,8 @@ def evaluate_ranked_contexts() -> None:
                     if first_route
                     else union_graph
                     if union_route
+                    else bridged_union_graph
+                    if bridged_union_route
                     else full_edge_graph
                     if full_route
                     else None

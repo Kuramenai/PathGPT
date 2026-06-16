@@ -28,6 +28,7 @@ spatial_weight = args.spatial_weight
 bm25_weight = args.bm25_weight
 evaluation_remarks = args.evaluation_remarks
 top_k_shortest = args.top_k_shortest
+k_shortest = args.k_shortest
 
 # fmt: off
 PREFIX_PATH = f"preprocessed_data/{place_name}_data/"

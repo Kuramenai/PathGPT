@@ -21,6 +21,7 @@ POI_CONTEXT_LIMIT = 3
 
 _GRAPH = None
 _EDGE_ID_TO_UVK = None
+_WEIGHT_METRIC = "length"
 
 
 def _get_od_nodes(
@@ -34,10 +35,13 @@ def _get_od_nodes(
     return u, v
 
 
-def _init_k_shortest_worker(graph: nx.MultiDiGraph, edge_id_to_uvk: Dict[int, Tuple[int, int, int]]) -> None:
-    global _GRAPH, _EDGE_ID_TO_UVK
+def _init_k_shortest_worker(
+    graph: nx.MultiDiGraph, edge_id_to_uvk: Dict[int, Tuple[int, int, int]], weight_metric: str = "length"
+) -> None:
+    global _GRAPH, _EDGE_ID_TO_UVK, _WEIGHT_METRIC
     _GRAPH = graph
     _EDGE_ID_TO_UVK = edge_id_to_uvk
+    _WEIGHT_METRIC = weight_metric
     gcd.edge_id_to_uvk = edge_id_to_uvk
     gcd.uvk_to_edge_id = {uvk: edge_id for edge_id, uvk in edge_id_to_uvk.items()}
 
@@ -49,9 +53,9 @@ def _compute_k_shortest_for_od(
     try:
         start_node, destination_node = _get_od_nodes(historical_path, _EDGE_ID_TO_UVK)
         node_paths = ox.routing.k_shortest_paths(
-            _GRAPH, start_node, destination_node, k=top_k, weight="length"
+            _GRAPH, start_node, destination_node, k=top_k, weight=_WEIGHT_METRIC
         )
-        edge_paths = [remap_to_edges(p, _GRAPH, "length") for p in islice(node_paths, top_k)]
+        edge_paths = [remap_to_edges(p, _GRAPH, _WEIGHT_METRIC) for p in islice(node_paths, top_k)]
     except (nx.NetworkXNoPath, nx.NodeNotFound, ValueError):
         edge_paths = []
     return od_pair, edge_paths
@@ -64,14 +68,15 @@ def construct_local_subgraphs(
     top_k_shortest: bool = False,
     top_k: int = 3,
     n_cores: int = 12,
+    weight_metric: str = "length",
 ) -> Dict[Tuple[int, int], Dict[int, Set[int]]]:
     """
     Constructs a local subgraph (adjacency list) for each edge-level Origin-Destination pair
     by merging historical, fastest, shortest, and k-shortest paths.
     """
-    _init_k_shortest_worker(graph, edge_id_to_uvk)
+    _init_k_shortest_worker(graph, edge_id_to_uvk, weight_metric)
 
-    # Collect unique OD pairs
+    od_pair_k_shortest_map: Dict[Tuple[int, int], List[List[int]]] = {}
     if top_k_shortest:
         od_to_historical: Dict[Tuple[int, int], List[int]] = {}
         for path_collection in dataset:
@@ -84,7 +89,9 @@ def construct_local_subgraphs(
         tasks = [(od_pair, hist, top_k) for od_pair, hist in od_to_historical.items()]
         if n_cores > 1 and len(tasks) > 1:
             with concurrent.futures.ProcessPoolExecutor(
-                max_workers=n_cores, initializer=_init_k_shortest_worker, initargs=(graph, edge_id_to_uvk)
+                max_workers=n_cores,
+                initializer=_init_k_shortest_worker,
+                initargs=(graph, edge_id_to_uvk, weight_metric),
             ) as executor:
                 od_pair_k_shortest_map = dict(
                     tqdm(
@@ -111,17 +118,16 @@ def construct_local_subgraphs(
         historical_path = path_collection.get("historical_path_edges", [])
         fastest_path = path_collection.get("fastest_path_edges", [])
         shortest_path = path_collection.get("shortest_path_edges", [])
+        # ponytail: train-only oracle corridor seed; never use test labels here
+        task_path = path_collection.get(f"{variables.path_type}_path_edges", [])
 
         if not historical_path:
             continue
 
         od_pair = (historical_path[0], historical_path[-1])
-        if top_k_shortest:
-            top_k_shortest = od_pair_k_shortest_map.get(od_pair, [])
-        else:
-            top_k_shortest = []
+        k_shortest_paths = od_pair_k_shortest_map.get(od_pair, []) if top_k_shortest else []
 
-        for path in [historical_path, fastest_path, shortest_path, *top_k_shortest]:
+        for path in [historical_path, fastest_path, shortest_path, *k_shortest_paths, task_path]:
             if not path:
                 continue  # Skip empty paths
             if len(path) == 1:
@@ -479,6 +485,16 @@ if __name__ == "__main__":
     cprint(f"-PLACE NAME : {variables.place_name.capitalize()}", "green")
     cprint(f"-PATH TYPE: {variables.path_type}\n", "green")
 
+    weight_metrics = {
+        "fastest": "travel_time",
+        "shortest": "length",
+        "fuel_efficient": "fuel_cost",
+        "highway_free": "fuel_cost",
+        "poi_aware": "touristic_value",
+        "scenic": "touristic_value",
+    }
+    weight_metric = weight_metrics.get(variables.path_type, "length")
+
     cprint("Loading graph...", "yellow")
     try:
         graph = load_graph(fname=variables.PICKLED_GRAPH)
@@ -502,7 +518,7 @@ if __name__ == "__main__":
     cprint("Building edge ID to UVK dictionary...", "yellow")
     edge_id_to_uvk = {int(i): (row.u, row.v, row.key) for i, row in edges_df.iterrows()}
 
-    if variables.path_type == "poi_aware":
+    if variables.path_type in ("poi_aware", "scenic"):
         apply_poi_aware_weights(graph, edges_df)
 
     poi_catalog = {}
@@ -529,8 +545,19 @@ if __name__ == "__main__":
 
     # 1. Build the uncompressed subgraphs
     cprint("Constructing raw local subgraphs...", "yellow")
+    cprint(
+        f"k-shortest enabled={variables.top_k_shortest}, k={variables.k_shortest}, "
+        f"weight={weight_metric}",
+        "cyan",
+    )
     uncompressed_subgraphs = construct_local_subgraphs(
-        graph, data, edge_id_to_uvk, top_k_shortest=variables.top_k_shortest, top_k=1, n_cores=16
+        graph,
+        data,
+        edge_id_to_uvk,
+        top_k_shortest=variables.top_k_shortest,
+        top_k=variables.k_shortest,
+        n_cores=16,
+        weight_metric=weight_metric,
     )
 
     Path(f"uncompressed_subgraphs/{variables.path_type}").mkdir(parents=True, exist_ok=True)

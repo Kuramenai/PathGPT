@@ -35,6 +35,12 @@ def get_args():
     )
     parser.add_argument("-embedding_model", default="intfloat/multilingual-e5-large-instruct", type=str)
     parser.add_argument("-top_k_shortest", default=False, action="store_true")
+    parser.add_argument(
+        "-k_shortest",
+        default=3,
+        type=int,
+        help="Number of task-weight k-shortest paths to merge into each train corridor.",
+    )
     parser.add_argument("-top_k", default=9, type=int)
     parser.add_argument(
         "-retrieval",
