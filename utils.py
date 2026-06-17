@@ -30,8 +30,11 @@ def get_args():
     parser.add_argument(
         "-llm_task",
         default="route_segments",
-        choices=["route_segments", "rank_contexts"],
-        help="LLM task for contextual runs: generate route segments or rank retrieved contexts.",
+        choices=["route_segments", "rank_contexts", "anchor_segments"],
+        help=(
+            "LLM task for contextual runs: generate route segments, rank retrieved contexts, "
+            "or select symbolic anchor segments for soft-prior decoding."
+        ),
     )
     parser.add_argument("-embedding_model", default="intfloat/multilingual-e5-large-instruct", type=str)
     parser.add_argument("-top_k_shortest", default=False, action="store_true")
@@ -71,6 +74,24 @@ def get_args():
     )
     parser.add_argument("-reset", action="store_true", help="Reset the database.")
     parser.add_argument("-evaluation_remarks", default="", type=str)
+    parser.add_argument(
+        "-soft_retrieved_discount",
+        default=0.85,
+        type=float,
+        help="Multiplicative edge-cost discount for retrieved-union edges in paper_v2 decoding.",
+    )
+    parser.add_argument(
+        "-soft_anchor_discount",
+        default=0.65,
+        type=float,
+        help="Multiplicative edge-cost discount for LLM-selected anchor edges in paper_v2 decoding.",
+    )
+    parser.add_argument(
+        "-random_anchor_seed",
+        default=13,
+        type=int,
+        help="Seed for deterministic random-anchor controls in paper_v2 evaluation.",
+    )
     args = parser.parse_args()
     return args
 

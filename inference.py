@@ -30,6 +30,19 @@ def get_output_json_schema() -> dict:
             "additionalProperties": False,
         }
 
+    if variables.use_context and variables.llm_task == "anchor_segments":
+        return {
+            "type": "object",
+            "properties": {
+                "anchor_segments": {
+                    "type": "array",
+                    "items": {"type": "string", "pattern": "^G[0-9]+$"},
+                }
+            },
+            "required": ["anchor_segments"],
+            "additionalProperties": False,
+        }
+
     if variables.use_context:
         return {
             "type": "object",

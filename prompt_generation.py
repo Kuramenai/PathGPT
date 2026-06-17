@@ -315,6 +315,18 @@ def generate_query(path_collection: dict) -> tuple[str, dict, tuple[int, int] | 
             f"输出格式（严格 JSON）：\n"
             f'{{\n  "ranked_contexts": [1, 2, 3]\n}}'
         )
+    elif variables.use_context and variables.llm_task == "anchor_segments":
+        question_text = (
+            f"根据上述候选道路网络上下文，选择对于从 {origin_name} 到 {dest_name} 的{chinese_task}路线最有帮助的符号化 G 路段，作为软语义锚点。\n\n"
+            f"请严格遵守以下规则：\n"
+            f"1. 仅输出候选上下文中出现过的符号化路段 ID，例如 G12。\n"
+            f"2. 优先选择道路属性、POI 信息以及局部拓扑结构最符合路线需求的路段。\n"
+            f"3. 不要输出道路名称、原始边 ID、完整路径、解释说明或推理过程。\n"
+            f"4. 这些锚点仅作为后续全图搜索的软提示，因此只选择最相关的路段。\n"
+            f"5. 如果没有任何有用的路段，返回空列表。\n\n"
+            f"输出格式（严格 JSON）：\n"
+            f'{{\n  "anchor_segments": ["G12", "G18", "G31"]\n}}'
+        )
     elif variables.use_context:
         question_text = (
             f"请结合上述符号化路网拓扑，寻找一条从 {origin_name} 到 {dest_name} 的{chinese_task}路线。\n\n"
@@ -351,6 +363,12 @@ def generate_query(path_collection: dict) -> tuple[str, dict, tuple[int, int] | 
         system_instruction = (
             f"您是一位具备丰富本地地理知识的{variables.place_name}道路导航助手。"
             f"您的任务是生成起点和终点之间最符合现实的驾驶路线。"
+        )
+
+    if variables.use_context and variables.llm_task == "anchor_segments":
+        system_instruction = (
+            f"你是一名 {variables.place_name} 的符号化道路路段选择助手。"
+            f"你的任务是选择一组紧凑的 G 路段锚点（G-segment anchors），用于为后续的全图路径搜索提供软引导。"
         )
 
     llm_query_dict = {"system_instruction": system_instruction, "question": question_text}

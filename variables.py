@@ -29,6 +29,9 @@ bm25_weight = args.bm25_weight
 evaluation_remarks = args.evaluation_remarks
 top_k_shortest = args.top_k_shortest
 k_shortest = args.k_shortest
+soft_retrieved_discount = args.soft_retrieved_discount
+soft_anchor_discount = args.soft_anchor_discount
+random_anchor_seed = args.random_anchor_seed
 
 # fmt: off
 PREFIX_PATH = f"preprocessed_data/{place_name}_data/"
