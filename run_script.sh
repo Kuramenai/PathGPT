@@ -8,7 +8,7 @@
 # python inference.py -use-context -place_name $1 -path_type highway_free | tee -a inference_log.txt
 # python evaluate.py -place_name $1 -path_type $2  -$3
 
-python subgraph_construction.py    -use-context -place_name $1 -path_type poi_aware -retrieval spatial_hybrid -llm_task rank_contexts -top_k 9
+python subgraph_construction.py    -use-context -place_name $1 -path_type poi_aware -retrieval spatial_hybrid -llm_task rank_contexts -top_k 9 -top_k_shortest
 python context_generation.py       -use-context -place_name $1 -path_type poi_aware -retrieval spatial_hybrid -llm_task rank_contexts -top_k 9
 python prompt_generation.py        -use-context -place_name $1 -path_type poi_aware -retrieval spatial_hybrid -llm_task rank_contexts -top_k 9
 python inference.py                -use-context -place_name $1 -path_type poi_aware -retrieval spatial_hybrid -llm_task rank_contexts -top_k 9
