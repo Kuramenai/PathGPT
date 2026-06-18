@@ -3,12 +3,20 @@ import pickle
 import variables
 import geopandas as gpd
 from bisect import bisect_left, bisect_right
+from pathlib import Path
 from tqdm import tqdm
 from termcolor import cprint
 from utils import make_dir
-from typing import Dict, Any, Tuple, List
+from typing import Dict, Any, Tuple, List, Set
 
 from filter_custom_dataset import clean_street_name
+from generate_custom_dataset import apply_poi_aware_weights, load_graph, poi_catalog_path
+from subgraph_construction import (
+    Segment,
+    build_edge_attribute_dicts,
+    build_global_segment_registry,
+    build_symbolic_subgraph,
+)
 
 
 def generate_markdown_prompt(
@@ -87,6 +95,52 @@ def generate_markdown_prompt(
 {topology_str}"""
 
     return markdown_prompt
+
+
+def uncompressed_to_single_edge_segments(
+    subgraph: Dict[int, Set[int]],
+) -> Dict[Segment, Set[Segment]]:
+    symbolic_adjacency: Dict[Segment, Set[Segment]] = {}
+    for edge_id, next_edges in subgraph.items():
+        segment = (int(edge_id),)
+        symbolic_adjacency.setdefault(segment, set())
+        for next_edge in next_edges:
+            next_segment = (int(next_edge),)
+            symbolic_adjacency[segment].add(next_segment)
+            symbolic_adjacency.setdefault(next_segment, set())
+    return symbolic_adjacency
+
+
+def build_uncompressed_symbolic_subgraphs(
+    uncompressed_subgraphs: Dict[Tuple[int, int], Dict[int, Set[int]]],
+    edge_dicts: Dict[str, Dict[int, Any]],
+    poi_catalog: Dict[int, Dict[str, str]],
+) -> Tuple[Dict[Tuple[int, int], Dict[str, Any]], Dict[str, Any]]:
+    single_edge_graphs = {
+        od_pair: uncompressed_to_single_edge_segments(subgraph)
+        for od_pair, subgraph in uncompressed_subgraphs.items()
+    }
+    segment_registry = build_global_segment_registry(single_edge_graphs)
+    segment_to_id = segment_registry["segment_to_id"]
+
+    symbolic_subgraphs = {}
+    for od_pair, single_edge_graph in tqdm(
+        single_edge_graphs.items(),
+        total=len(single_edge_graphs),
+        dynamic_ncols=True,
+        desc="Symbolizing uncompressed corridors",
+    ):
+        start_edge, dest_edge = od_pair
+        symbolic_subgraphs[od_pair] = build_symbolic_subgraph(
+            single_edge_graph,
+            edge_dicts,
+            start_edge,
+            dest_edge,
+            segment_to_id,
+            poi_catalog,
+        )
+
+    return symbolic_subgraphs, segment_registry
 
 
 def generate_embedding_text(
@@ -331,6 +385,80 @@ if __name__ == "__main__":
     cprint("\n\nGENERATING MARKDOWN PROMPTS FOR :", "yellow", attrs=["bold"])
     cprint(f"-PLACE NAME : {variables.place_name.capitalize()}", "green")
     cprint(f"-PATH TYPE: {variables.path_type}\n", "green")
+
+    if variables.corridor_graph_form == "uncompressed":
+        cprint("-CORRIDOR GRAPH FORM: uncompressed\n", "green")
+        cprint("Loading uncompressed subgraphs...", "yellow")
+        subgraph_filename = f"uncompressed_subgraphs/{variables.path_type}/{variables.place_name}_data.pkl"
+        try:
+            with open(subgraph_filename, "rb") as f:
+                uncompressed_subgraphs = pickle.load(f)
+        except FileNotFoundError:
+            cprint(
+                f"Subgraph not found at {subgraph_filename}. Please run subgraph_construction.py first.",
+                "red",
+            )
+            exit(1)
+
+        cprint("Loading edge and graph attributes...", "yellow")
+        edges_df = gpd.read_file(variables.EDGE_DATA)
+        graph = load_graph(fname=variables.PICKLED_GRAPH)
+        edge_id_to_uvk = {int(i): (row.u, row.v, row.key) for i, row in edges_df.iterrows()}
+        if variables.path_type in ("poi_aware", "scenic"):
+            apply_poi_aware_weights(graph, edges_df)
+
+        poi_catalog = {}
+        catalog_file = poi_catalog_path()
+        if Path(catalog_file).exists():
+            with open(catalog_file, "rb") as f:
+                poi_catalog = pickle.load(f)
+
+        edge_dicts = build_edge_attribute_dicts(graph, edges_df, edge_id_to_uvk)
+        symbolic_subgraphs, segment_registry = build_uncompressed_symbolic_subgraphs(
+            uncompressed_subgraphs,
+            edge_dicts,
+            poi_catalog,
+        )
+
+        symbolic_path = f"{variables.symbolic_subgraph_root}/{variables.path_type}"
+        make_dir(symbolic_path)
+        with open(f"{symbolic_path}/{variables.place_name}_data", "wb") as f:
+            pickle.dump(symbolic_subgraphs, f)
+        with open(f"{symbolic_path}/{variables.place_name}_segment_registry", "wb") as f:
+            pickle.dump(segment_registry, f)
+
+        cprint(f"Loaded {len(symbolic_subgraphs)} subgraphs successfully!\n", "light_green")
+        cprint("Generating prompts...", "yellow")
+        final_prompts_dataset = []
+        intent_stats = build_intent_stats(
+            [extract_corridor_features(subgraph) for subgraph in symbolic_subgraphs.values()]
+        )
+
+        for od_pair, subgraph in tqdm(
+            symbolic_subgraphs.items(),
+            total=len(symbolic_subgraphs),
+            dynamic_ncols=True,
+            desc="Generating Markdown prompts",
+        ):
+            final_prompts_dataset.append(
+                {
+                    "od_pair": od_pair,
+                    "embedding_text": generate_embedding_text(od_pair, subgraph, edge_dicts, intent_stats),
+                    "llm_prompt": generate_markdown_prompt(od_pair, subgraph, edge_dicts),
+                }
+            )
+
+        path = f"json_files/{variables.path_type}"
+        make_dir(path)
+        output_name = f"{variables.place_name}{variables.context_name_suffix}_markdown_prompts.json"
+        with open(f"{path}/{output_name}", "w", encoding="utf-8") as f:
+            json.dump(final_prompts_dataset, f, indent=2, ensure_ascii=False)
+        cprint(f"Prompts saved at {path}/{output_name}", "green")
+        cprint(
+            f"Successfully generated {len(final_prompts_dataset)} prompts ready for prompt_generation.py!",
+            "light_green",
+        )
+        exit(0)
 
     cprint("Loading symbolic subgraphs...", "yellow")
     subgraph_filename = f"symbolic_subgraphs/{variables.path_type}/{variables.place_name}_data"

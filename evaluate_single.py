@@ -10,6 +10,7 @@ from collections import defaultdict
 from typing import Any, Dict, List, Optional, Set, Tuple
 from termcolor import cprint
 from filter_custom_dataset import clean_street_name
+from utils import make_dir
 
 
 def extract_json_object(raw_text: str) -> dict:
@@ -263,6 +264,18 @@ def append_edge(edge_route: List[int], edge_id: int) -> None:
         edge_route.append(edge_id)
 
 
+def generated_output_name() -> str:
+    if variables.use_context:
+        task_suffix = f"_{variables.llm_task}" if variables.llm_task != "route_segments" else ""
+        return (
+            f"{variables.retrieval_type}_context_{variables.place_name}"
+            f"{variables.context_name_suffix}_top_"
+            f"{variables.number_of_docs_to_retrieve}{task_suffix}"
+        )
+
+    return f"no_context_{variables.place_name}_top_{variables.number_of_docs_to_retrieve}"
+
+
 def repair_edge_route(
     edge_route: List[int],
     edge_id_to_uvk: Dict[int, tuple],
@@ -311,10 +324,7 @@ if __name__ == "__main__":
 
     # 1. Load the generated results from the previous vLLM script
     file_path = f"generated_paths/{variables.path_type}/"
-    if variables.use_context:
-        file_name = f"{variables.retrieval_type}_context_{variables.place_name}_top_{variables.number_of_docs_to_retrieve}"
-    else:
-        file_name = f"no_context_{variables.place_name}_top_{variables.number_of_docs_to_retrieve}"
+    file_name = generated_output_name()
 
     try:
         with open(file_path + file_name, "rb") as f:
@@ -338,7 +348,8 @@ if __name__ == "__main__":
     id_to_edges = {}
     if variables.use_context:
         registry_filename = (
-            f"symbolic_subgraphs/{variables.path_type}/{variables.place_name}_segment_registry"
+            f"{variables.symbolic_subgraph_root}/{variables.path_type}/"
+            f"{variables.place_name}_segment_registry"
         )
         try:
             with open(registry_filename, "rb") as f:
@@ -486,3 +497,52 @@ if __name__ == "__main__":
             f"Repair Gaps: fixed {repair_fixed_count}/{repair_attempted_count}, failed {repair_failed_count}",
             "cyan",
         )
+
+    output_dir = f"evaluation_results/{variables.path_type}/"
+    make_dir(output_dir)
+    output_path = output_dir + f"{file_name}_single.json"
+    summary = {
+        "place_name": variables.place_name,
+        "path_type": variables.path_type,
+        "use_context": variables.use_context,
+        "llm_task": variables.llm_task,
+        "retrieval_type": variables.retrieval_type if variables.use_context else None,
+        "corridor_graph_form": variables.corridor_graph_form if variables.use_context else None,
+        "top_k": variables.number_of_docs_to_retrieve,
+        "total_samples": len(raw_llm_outputs),
+        "valid_json_routes": valid_routes_count,
+        "valid_json_route_rate": valid_routes_count / len(raw_llm_outputs) if raw_llm_outputs else 0.0,
+        "topologically_valid": topologically_valid_count,
+        "topologically_valid_rate": topology_rate / 100,
+        "topologically_valid_rate_on_generated": topology_rate_on_generated / 100,
+        "precision": float(np.mean(all_precisions)) if all_precisions else 0.0,
+        "recall": float(np.mean(all_recalls)) if all_recalls else 0.0,
+    }
+    if variables.use_context:
+        summary.update(
+            {
+                "road_precision": float(np.mean(all_road_precisions)) if all_road_precisions else 0.0,
+                "road_recall": float(np.mean(all_road_recalls)) if all_road_recalls else 0.0,
+                "repaired_edge_precision": (
+                    float(np.mean(repaired_edge_precisions)) if repaired_edge_precisions else 0.0
+                ),
+                "repaired_edge_recall": (
+                    float(np.mean(repaired_edge_recalls)) if repaired_edge_recalls else 0.0
+                ),
+                "repaired_road_precision": (
+                    float(np.mean(repaired_road_precisions)) if repaired_road_precisions else 0.0
+                ),
+                "repaired_road_recall": (
+                    float(np.mean(repaired_road_recalls)) if repaired_road_recalls else 0.0
+                ),
+                "repaired_topologically_valid": repaired_topologically_valid_count,
+                "repaired_topologically_valid_rate": repaired_topology_rate / 100,
+                "repaired_topologically_valid_rate_on_generated": repaired_topology_rate_on_generated / 100,
+                "repair_attempted": repair_attempted_count,
+                "repair_fixed": repair_fixed_count,
+                "repair_failed": repair_failed_count,
+            }
+        )
+    with open(output_path, "w", encoding="utf-8") as f:
+        json.dump(summary, f, indent=2, ensure_ascii=False)
+    cprint(f"\nSaved single-run evaluation to {output_path}", "green")

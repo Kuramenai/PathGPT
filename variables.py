@@ -17,6 +17,13 @@ save_as = args.save_as
 use_context = args.use_context
 llm = args.llm
 llm_task = args.llm_task
+corridor_graph_form = args.corridor_graph_form
+context_name_suffix = "_uncompressed" if corridor_graph_form == "uncompressed" else ""
+symbolic_subgraph_root = (
+    "symbolic_subgraphs_uncompressed"
+    if corridor_graph_form == "uncompressed"
+    else "symbolic_subgraphs"
+)
 embedding_model = args.embedding_model
 embedding_model_formatted_name = embedding_model.split("/")[1]
 model_kwargs = {"device": "cuda"}

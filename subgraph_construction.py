@@ -536,7 +536,10 @@ if __name__ == "__main__":
         with open(filtered_train_data, "rb") as f:
             data = pickle.load(f)
     except FileNotFoundError:
-        cprint(f"Train data not found at {data}! Please run generate_custom_dataset.py first.", "red")
+        cprint(
+            f"Train data not found at {filtered_train_data}! Please run generate_custom_dataset.py first.",
+            "red",
+        )
         exit(1)
 
     cprint(f"Loaded {len(data)} train samples from {filtered_train_data}", "cyan")

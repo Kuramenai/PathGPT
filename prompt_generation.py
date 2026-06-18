@@ -28,6 +28,8 @@ def welcome_text():
     cprint(f"-PATH TYPE : {variables.path_type}", "green")
     cprint(f"-USE CONTEXT : {variables.use_context}", "green")
     cprint(f"-LLM TASK : {variables.llm_task}", "green")
+    if variables.use_context:
+        cprint(f"-CORRIDOR GRAPH FORM : {variables.corridor_graph_form}", "green")
     cprint(f"-NUMBER OF DOCUMENTS TO RETRIEVE : {variables.number_of_docs_to_retrieve}", "green")
     cprint(f"-RETRIEVAL : {variables.retrieval_type}", "green")
 
@@ -263,7 +265,8 @@ def prompts_output_name(top_k: int) -> str:
     task_suffix = (
         f"_{variables.llm_task}" if variables.use_context and variables.llm_task != "route_segments" else ""
     )
-    return f"{variables.place_name}_prompts_{variables.retrieval_type}_top_{top_k}{task_suffix}"
+    context_suffix = variables.context_name_suffix if variables.use_context else ""
+    return f"{variables.place_name}{context_suffix}_prompts_{variables.retrieval_type}_top_{top_k}{task_suffix}"
 
 
 def tokenize_chinese(text: str) -> list[str]:
@@ -413,8 +416,33 @@ def get_prompt(llm_query_dict: dict, retrieved_markdown_docs: list[str], use_con
 if __name__ == "__main__":
     welcome_text()
 
+    if not variables.use_context:
+        test_data_filename = f"filtered_test_data/{variables.path_type}/{variables.place_name}_data"
+        with open(test_data_filename, "rb") as f:
+            test_data = pickle.load(f)
+
+        if variables.place_name == "chengdu":
+            test_data = test_data[:1_500]
+
+        prompts = [
+            get_prompt(generate_query(path_collection)[1], [], use_context=False)
+            for path_collection in tqdm(test_data, dynamic_ncols=True, desc="Generating no-context prompts")
+        ]
+
+        prompts_filepath = f"prompts/{variables.path_type}/no_context/"
+        make_dir(prompts_filepath)
+        output_name = prompts_output_name(variables.number_of_docs_to_retrieve)
+        with open(prompts_filepath + output_name, "wb") as f:
+            pickle.dump(prompts, f)
+        cprint(f"Prompts saved to {prompts_filepath}{output_name}", "green")
+        cprint(f"\nSuccessfully generated {len(prompts)} no-context prompts ready for Qwen3-8B!", "light_green")
+        exit(0)
+
     # 1. LOAD DATA (Fixed JSON Loading)
-    json_file_path = f"json_files/{variables.path_type}/{variables.place_name}_markdown_prompts.json"
+    json_file_path = (
+        f"json_files/{variables.path_type}/"
+        f"{variables.place_name}{variables.context_name_suffix}_markdown_prompts.json"
+    )
     with open(json_file_path, "r", encoding="utf-8") as f:
         context_dataset = json.load(f)
 
@@ -541,6 +569,7 @@ if __name__ == "__main__":
                 "place_name": variables.place_name,
                 "path_type": variables.path_type,
                 "retrieval_type": variables.retrieval_type,
+                "corridor_graph_form": variables.corridor_graph_form,
                 "top_k": variables.number_of_docs_to_retrieve,
                 "spatial_candidate_k": variables.spatial_candidate_k,
                 "spatial_weight": variables.spatial_weight,

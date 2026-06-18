@@ -36,6 +36,15 @@ def get_args():
             "or select symbolic anchor segments for soft-prior decoding."
         ),
     )
+    parser.add_argument(
+        "-corridor_graph_form",
+        default="compressed",
+        choices=["compressed", "uncompressed"],
+        help=(
+            "Context graph representation for corridor prompts. "
+            "Use uncompressed to expose one symbolic segment per original edge."
+        ),
+    )
     parser.add_argument("-embedding_model", default="intfloat/multilingual-e5-large-instruct", type=str)
     parser.add_argument("-top_k_shortest", default=False, action="store_true")
     parser.add_argument(

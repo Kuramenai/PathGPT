@@ -38,14 +38,15 @@ SEGMENT_ID_PATTERN = re.compile(r"^G[0-9]+$")
 
 def anchor_output_name() -> str:
     return (
-        f"{variables.retrieval_type}_context_{variables.place_name}_top_"
+        f"{variables.retrieval_type}_context_{variables.place_name}"
+        f"{variables.context_name_suffix}_top_"
         f"{variables.number_of_docs_to_retrieve}_anchor_segments"
     )
 
 
 def anchor_metadata_name() -> str:
     return (
-        f"{variables.place_name}_prompts_{variables.retrieval_type}_top_"
+        f"{variables.place_name}{variables.context_name_suffix}_prompts_{variables.retrieval_type}_top_"
         f"{variables.number_of_docs_to_retrieve}_anchor_segments.json"
     )
 
@@ -261,9 +262,12 @@ def evaluate_paper_v2() -> None:
     uncompressed_subgraph_path = (
         f"uncompressed_subgraphs/{variables.path_type}/{variables.place_name}_data.pkl"
     )
-    symbolic_subgraph_path = f"symbolic_subgraphs/{variables.path_type}/{variables.place_name}_data"
+    symbolic_subgraph_path = (
+        f"{variables.symbolic_subgraph_root}/{variables.path_type}/{variables.place_name}_data"
+    )
     segment_registry_path = (
-        f"symbolic_subgraphs/{variables.path_type}/{variables.place_name}_segment_registry"
+        f"{variables.symbolic_subgraph_root}/{variables.path_type}/"
+        f"{variables.place_name}_segment_registry"
     )
 
     try:
@@ -516,7 +520,7 @@ def evaluate_paper_v2() -> None:
     output_dir = f"evaluation_results/{variables.path_type}/"
     make_dir(output_dir)
     output_path = output_dir + (
-        f"{variables.place_name}_{variables.retrieval_type}_top_"
+        f"{variables.place_name}{variables.context_name_suffix}_{variables.retrieval_type}_top_"
         f"{variables.number_of_docs_to_retrieve}_paper_v2.json"
     )
     with open(output_path, "w", encoding="utf-8") as f:
@@ -525,6 +529,7 @@ def evaluate_paper_v2() -> None:
                 "place_name": variables.place_name,
                 "path_type": variables.path_type,
                 "retrieval_type": variables.retrieval_type,
+                "corridor_graph_form": variables.corridor_graph_form,
                 "top_k": variables.number_of_docs_to_retrieve,
                 "weight_column": weight_column,
                 "weight_source": weight_meta,
