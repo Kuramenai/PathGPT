@@ -189,7 +189,9 @@ def random_matched_anchor_segments(
         return []
 
     rng = random.Random(seed)
-    available = sorted(segment_id for segment_id in candidate_segment_ids if segment_id not in anchor_segment_ids)
+    available = sorted(
+        segment_id for segment_id in candidate_segment_ids if segment_id not in anchor_segment_ids
+    )
     if not available:
         available = sorted(candidate_segment_ids)
 
@@ -219,6 +221,37 @@ def random_matched_anchor_segments(
 def _load_pickle(path: str):
     with open(path, "rb") as f:
         return pickle.load(f)
+
+
+def print_missing_artifact_help(missing_path: str) -> None:
+    cprint(f"Missing artifact: {missing_path}", "red")
+    cprint("For this evaluator, the upstream anchor-generation pipeline is:", "yellow")
+    print(
+        "python context_generation.py "
+        f"-use-context -place_name {variables.place_name} -path_type {variables.path_type} "
+        f"-corridor_graph_form {variables.corridor_graph_form}"
+    )
+    print(
+        "python prompt_generation.py "
+        f"-use-context -place_name {variables.place_name} -path_type {variables.path_type} "
+        f"-retrieval {variables.retrieval_type} -llm_task anchor_segments "
+        f"-top_k {variables.number_of_docs_to_retrieve} "
+        f"-corridor_graph_form {variables.corridor_graph_form}"
+    )
+    print(
+        "python inference.py "
+        f"-use-context -place_name {variables.place_name} -path_type {variables.path_type} "
+        f"-retrieval {variables.retrieval_type} -llm_task anchor_segments "
+        f"-top_k {variables.number_of_docs_to_retrieve} "
+        f"-corridor_graph_form {variables.corridor_graph_form}"
+    )
+    print(
+        "python evaluate_paper_v2.py "
+        f"-use-context -place_name {variables.place_name} -path_type {variables.path_type} "
+        f"-retrieval {variables.retrieval_type} -llm_task anchor_segments "
+        f"-top_k {variables.number_of_docs_to_retrieve} "
+        f"-corridor_graph_form {variables.corridor_graph_form}"
+    )
 
 
 def _self_check() -> None:
@@ -266,8 +299,7 @@ def evaluate_paper_v2() -> None:
         f"{variables.symbolic_subgraph_root}/{variables.path_type}/{variables.place_name}_data"
     )
     segment_registry_path = (
-        f"{variables.symbolic_subgraph_root}/{variables.path_type}/"
-        f"{variables.place_name}_segment_registry"
+        f"{variables.symbolic_subgraph_root}/{variables.path_type}/{variables.place_name}_segment_registry"
     )
 
     try:
@@ -280,6 +312,7 @@ def evaluate_paper_v2() -> None:
         segment_registry = _load_pickle(segment_registry_path)
     except FileNotFoundError as exc:
         cprint(f"Error loading files: {exc}", "red")
+        print_missing_artifact_help(str(exc.filename or "unknown"))
         raise SystemExit(1)
 
     if variables.place_name == "chengdu":
@@ -499,9 +532,7 @@ def evaluate_paper_v2() -> None:
     summaries = {
         strategy_name: stats.summary(total_samples) for strategy_name, stats in strategy_stats.items()
     }
-    gt_in_retrieved_union_rate = (
-        gt_in_retrieved_union_count / total_samples if total_samples else 0.0
-    )
+    gt_in_retrieved_union_rate = gt_in_retrieved_union_count / total_samples if total_samples else 0.0
 
     cprint(f"\nResults for {variables.place_name} ({variables.path_type})", "green", attrs=["bold"])
     print(f"Total Samples Tested: {total_samples}")
