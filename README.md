@@ -1,38 +1,39 @@
-# Reframing Path Recommendation as a Natural Language Generation Task with Retrieval-Augmented Language Models
+# LLMDrive: LLM-Guided Path Recommendation with Retrieved Topological Corridors
 
-This repository hosts the implementation code of the paper PathGPT: Reframing Route Recommendation as a Natural Language Task using Retrieved Augmented Language Models.
+This repository hosts the implementation code of the paper LLMDrive: LLM-Guided Path Recommendation with Retrieved Topological Corridors
 
-# Introduction
+<!-- # Introduction
 
-The proliferation of GPS-enabled devices has led to the accumulation of a substantial corpus of historical trajectory data. By leveraging these data for training machine learning models, researchers have devised novel data-driven methodologies that address the personalized aspect of the path recommendation (PR) problem. In contrast to conventional algorithms such as Dijkstra’s shortest path algorithm, these novel algorithms possess the capacity to discern and learn patterns within the data, thereby facilitating the generation of more personalized paths. However, once these models have been trained, their application is constrained to the generation of routes that align with their training patterns. This limitation renders them less adaptable to novel scenarios and the deployment of multiple machine learning models might be necessary to address new possible scenarios, which can be costly as each model must be trained separately. 
+Path recommendation aims to generate routes tailored to user preferences, yet traditional routing methods optimize fixed cost metrics and learning-based methods require retraining for each new preference—neither scales to diverse, open-ended requirements. Although large language models (LLMs) enable natural-language-driven planning, they often produce topologically invalid routes due to weak spatial reasoning. We present LLMDrive, a retrieval-augmented generation framework with three key designs. (1) We construct local topological corridors by merging historical trajectories with graph-derived paths, and compress them into decision graphs that preserve road connectivity within LLM context budgets. (2) We convert road edges into natural-language descriptions with semantic attributes and explicit adjacency, bridging the modality gap with LLMs. (3) We design a two-stage pipeline (BM25 lexical filtering followed by dense semantic retrieval) to efficiently identify relevant corridors. Experiments on taxi trajectory datasets from three cities over scenic and fuel-efficient route recommendation tasks show that LLMDrive, without task-specific fine-tuning, is competitive with supervised baselines and outperforms the same LLM without retrieved context by over 30 precision points.
 
+![context_generation](https://github.com/user-attachments/assets/e3c94bdb-c2ad-4eb8-b80a-ac830c29dd34)
 ![context_generation](https://github.com/user-attachments/assets/e3c94bdb-c2ad-4eb8-b80a-ac830c29dd34)
 
 Inspired by recent advances in the field of Large Language
 Models (LLMs), we leveraged their natural language understanding capabilities to develop a unified model while being seamlessly adaptable to new scenarios without additional training.
 To accomplish this, we combined the extensive knowledge LLMs acquired during training with further access to external hand-crafted context in
-formation, similar to RAG (Retrieved Augmented Generation) systems, to enhance their ability to generate paths according to user-defined requirements. 
+formation, similar to RAG (Retrieved Augmented Generation) systems, to enhance their ability to generate paths according to user-defined requirements.  -->
 
-![pathgpt_framework](https://github.com/user-attachments/assets/9160e97f-12ea-4905-b752-2ca7e0ed6519)
+<!-- ![pathgpt_framework](https://github.com/user-attachments/assets/9160e97f-12ea-4905-b752-2ca7e0ed6519) -->
 
 # Environment setup
-For reference, all of our experiments were conducted on a server machine running Ubuntu 22.04 LTS with a NVIDIA RTX 4090.
+For reference, all of our experiments were conducted on a server machine running Ubuntu 22.04 LTS with a NVIDIA RTX 4050.
 
-## Local deployment of qwen2.5:14b-instruct
-We use the 4-bit version of qwen2.5:14b-instruct as the base LLM for our experiments which be locally deployed through Ollama by following the deployment procedure below.
+## Local deployment of Qwen3-8b
+We use Qwen3-8b as the base LLM for our experiments which can be locally deployed through frameworks such as Ollama. Below is an example for local deployment using Ollama.
 - First, install Ollama on your local machine
     * If you are on Linux, run:
       ```bash
       curl -fsSL https://ollama.com/install.sh | sh
       ```
     * If you are on Windows or macOS, you can download it [here](https://ollama.com/download) and follow the official installation instructions
-- Then download and deploy qwen2.5:14b-instruct by running:
+- Then download and deploy Qwen3-8b by running:
     ```bash
-   ollama run qwen2.5:14b-instruct
+   ollama run qwen3:8b
     ```
 **N.B.**
 - For optimal performance, we recommend running the model on a GPU
-- The 14b version of qwen2.5 requires at least 10 GB of VRAM, so make sure you have enough VRAM  if you are planning to run it on a GPU.
+- Qwen3-8b requires at least 10 GB of VRAM, so make sure you have enough VRAM  if you are planning to run it on a GPU.
 - The ollama service needs to be launched manually on Ubuntu 22.04 LTS. This can be accomplished by running:
   ```bash
   sudo systemctl enable ollama
@@ -64,8 +65,6 @@ In place extract the json documents located in the json_files/highway_free folde
 
 ### POIs
 Extract the POIs (Points of Interests) from the folder pois.rar.
-
-
    
 ## Install dependencies
 Before installing the dependencies, we recommend first creating a virtual environment. 
@@ -107,7 +106,7 @@ To get the evaluation results on the three used datasets, run
 python evaluate_all.py
 ```
 which outputs the following information, including the precision and recall scores for the base LLM and PathGPT when the number of retrieved documents is set to 3, 6, and 9, respectively.
-```console
+<!-- ```console
 Overall performance of PathGPT with:
 -llm : qwen2.5-14b
 -embedding model : multilingual-e5-large-instruct
@@ -175,7 +174,7 @@ Overall performance of PathGPT with:
                          highway_free             chengdu                  35.29  |  90.79          26.06  |  92.81          
                          highway_free             harbin                   50.59  |  86.56          26.89  |  86.17          
      
-```
+``` -->
 
 
 
