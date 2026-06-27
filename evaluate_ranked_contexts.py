@@ -20,7 +20,7 @@ from evaluate_single import (
     edge_ids_to_road_names,
     safe_float,
 )
-from generate_custom_dataset import apply_poi_aware_weights, load_graph
+from data_augmentation import apply_poi_aware_weights, load_graph
 from utils import make_dir
 
 
@@ -180,7 +180,7 @@ def print_weight_source(weight_meta: dict, path_type: str) -> None:
     if weight_meta["graph_hits"] == 0 and path_type not in ("shortest",):
         cprint(
             f"WARNING: no graph weights found for '{weight_meta['weight_column']}'. "
-            "Re-run generate_custom_dataset or subgraph_construction.",
+            "Re-run data_augmentation or subgraph_construction.",
             "yellow",
         )
 
@@ -474,18 +474,14 @@ def evaluate_corridor(
     dest_edge: Optional[int],
     ground_truth_edges: List[int],
 ) -> Tuple[bool, float]:
-    edge_route = corridor_route(
-        od_pair, uncompressed_subgraphs, edge_weights, start_edge, dest_edge
-    )
+    edge_route = corridor_route(od_pair, uncompressed_subgraphs, edge_weights, start_edge, dest_edge)
     if not edge_route:
         return False, 0.0
     _, recall = calculate_metrics(edge_route, ground_truth_edges)
     return True, recall
 
 
-def compute_jaccard_similarity(
-    path1: List[int], path2: List[int], edge_lengths: Dict[int, float]
-) -> float:
+def compute_jaccard_similarity(path1: List[int], path2: List[int], edge_lengths: Dict[int, float]) -> float:
     # ponytail: copied from filter_custom_dataset to avoid heavy module imports
     s1, s2 = set(path1), set(path2)
     intersection_length = sum(edge_lengths.get(e, 0.0) for e in s1.intersection(s2))
@@ -602,9 +598,7 @@ class StrategyStats:
             self.jaccard_scores.append(
                 compute_jaccard_similarity(edge_route, ground_truth_edges, edge_lengths)
             )
-            self.edit_similarities.append(
-                normalized_edit_similarity(edge_route, ground_truth_edges)
-            )
+            self.edit_similarities.append(normalized_edit_similarity(edge_route, ground_truth_edges))
             gt_cost = route_cost(ground_truth_edges, edge_weights)
             if gt_cost > 0:
                 self.cost_ratios.append(route_cost(edge_route, edge_weights) / gt_cost)
@@ -619,9 +613,7 @@ class StrategyStats:
                 self.topology_valid_count / self.generated_count if self.generated_count else 0.0
             ),
             "valid_in_graph": self.valid_in_graph_count,
-            "valid_in_graph_rate": (
-                self.valid_in_graph_count / total_samples if total_samples else 0.0
-            ),
+            "valid_in_graph_rate": (self.valid_in_graph_count / total_samples if total_samples else 0.0),
             "valid_in_graph_rate_on_generated": (
                 self.valid_in_graph_count / self.generated_count if self.generated_count else 0.0
             ),
@@ -630,9 +622,7 @@ class StrategyStats:
             "road_precision": float(np.mean(self.road_precisions)) if self.road_precisions else 0.0,
             "road_recall": float(np.mean(self.road_recalls)) if self.road_recalls else 0.0,
             "jaccard": float(np.mean(self.jaccard_scores)) if self.jaccard_scores else 0.0,
-            "edit_similarity": (
-                float(np.mean(self.edit_similarities)) if self.edit_similarities else 0.0
-            ),
+            "edit_similarity": (float(np.mean(self.edit_similarities)) if self.edit_similarities else 0.0),
             "cost_ratio": float(np.mean(self.cost_ratios)) if self.cost_ratios else 0.0,
             "avg_route_edges": float(np.mean(self.route_lengths)) if self.route_lengths else 0.0,
         }
@@ -697,8 +687,7 @@ def print_strategy_summary(strategy_name: str, summary: dict, total_samples: int
     )
     print(f"Average route length: {summary['avg_route_edges']:.2f} edges")
     cprint(
-        f"Jaccard / Edit similarity: {summary['jaccard'] * 100:.2f} / "
-        f"{summary['edit_similarity'] * 100:.2f}",
+        f"Jaccard / Edit similarity: {summary['jaccard'] * 100:.2f} / {summary['edit_similarity'] * 100:.2f}",
         "cyan",
     )
     cprint(f"Cost ratio (pred/gt): {summary['cost_ratio']:.3f}", "cyan")
@@ -810,9 +799,7 @@ def evaluate_ranked_contexts() -> None:
         apply_poi_aware_weights(graph, edges_df)
 
     weight_column = task_weight_column(variables.path_type)
-    edge_weights, weight_meta = build_task_edge_weights(
-        edges_df, edge_id_to_uvk, graph, weight_column
-    )
+    edge_weights, weight_meta = build_task_edge_weights(edges_df, edge_id_to_uvk, graph, weight_column)
     length_column = "length" if "length" in edges_df.columns else weight_column
     edge_lengths = build_edge_weights(edges_df, length_column)
     full_edge_graph = build_full_edge_transition_graph(edges_df, edge_weights)
@@ -846,9 +833,7 @@ def evaluate_ranked_contexts() -> None:
 
         ranked_context_ids, ranked_pairs = ranked_od_pairs(raw_text, query_metadata)
         retrieved_pairs = retrieved_od_pairs(query_metadata)
-        if ground_truth_in_retrieved_union(
-            ground_truth_edges, retrieved_pairs, uncompressed_subgraphs
-        ):
+        if ground_truth_in_retrieved_union(ground_truth_edges, retrieved_pairs, uncompressed_subgraphs):
             gt_in_retrieved_union_count += 1
         if has_ranked_contexts_json(raw_text):
             valid_json_count += 1
@@ -1006,9 +991,7 @@ def evaluate_ranked_contexts() -> None:
         source: count / total_samples if total_samples else 0.0
         for source, count in sorted(cascade_fallback_counts.items())
     }
-    gt_in_retrieved_union_rate = (
-        gt_in_retrieved_union_count / total_samples if total_samples else 0.0
-    )
+    gt_in_retrieved_union_rate = gt_in_retrieved_union_count / total_samples if total_samples else 0.0
 
     cprint(f"\nResults for {variables.place_name} ({variables.path_type})", "green", attrs=["bold"])
     print(f"Total Samples Tested: {total_samples}")

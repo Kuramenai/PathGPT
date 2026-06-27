@@ -7,11 +7,11 @@ import geopandas as gpd
 from termcolor import cprint
 from tqdm import tqdm
 from collections import defaultdict, deque
-from generate_custom_dataset import edge_id_to_node_id
-import generate_custom_dataset as gcd
+from data_augmentation import edge_id_to_node_id
+import data_augmentation as da
 from typing import List, Dict, Any, Set, Tuple
-from generate_custom_dataset import apply_poi_aware_weights, load_graph, poi_catalog_path, remap_to_edges
-from filter_custom_dataset import clean_street_name
+from data_augmentation import apply_poi_aware_weights, load_graph, poi_catalog_path, remap_to_edges
+from data_preprocessing import clean_street_name
 import osmnx as ox
 from itertools import islice
 
@@ -42,8 +42,8 @@ def _init_k_shortest_worker(
     _GRAPH = graph
     _EDGE_ID_TO_UVK = edge_id_to_uvk
     _WEIGHT_METRIC = weight_metric
-    gcd.edge_id_to_uvk = edge_id_to_uvk
-    gcd.uvk_to_edge_id = {uvk: edge_id for edge_id, uvk in edge_id_to_uvk.items()}
+    da.edge_id_to_uvk = edge_id_to_uvk
+    da.uvk_to_edge_id = {uvk: edge_id for edge_id, uvk in edge_id_to_uvk.items()}
 
 
 def _compute_k_shortest_for_od(
@@ -537,7 +537,7 @@ if __name__ == "__main__":
             data = pickle.load(f)
     except FileNotFoundError:
         cprint(
-            f"Train data not found at {filtered_train_data}! Please run generate_custom_dataset.py first.",
+            f"Train data not found at {filtered_train_data}! Please run data_preprocessing.py first.",
             "red",
         )
         exit(1)

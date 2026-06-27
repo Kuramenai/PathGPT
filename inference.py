@@ -1,11 +1,7 @@
-import os
 import pickle
-import json
 import variables
 from termcolor import cprint
-from tqdm import tqdm
-from pathlib import Path
-from utils import TimeoutException, timeout_handler, make_dir
+from utils import make_dir
 from prompt_generation import prompts_output_name, welcome_text
 from vllm import LLM, SamplingParams
 from transformers import AutoTokenizer
@@ -140,7 +136,7 @@ if __name__ == "__main__":
         )
         formatted_messages.append(text)
 
-    cprint(f"Starting bulk generation via vLLM...", "yellow")
+    cprint("Starting bulk generation via vLLM...", "yellow")
 
     responses = llm.generate(formatted_messages, sampling_params)
 

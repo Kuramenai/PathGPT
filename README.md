@@ -1,113 +1,95 @@
 # LLMDrive: LLM-Guided Path Recommendation with Retrieved Topological Corridors
 
-This repository hosts the implementation code of the paper LLMDrive: LLM-Guided Path Recommendation with Retrieved Topological Corridors
+This repository hosts the implementation of **LLMDrive**: a retrieval-augmented path recommendation framework. It builds local topological corridors from trajectories and graph paths, retrieves relevant corridors for each query, and uses an LLM to recommend paths.
 
-<!-- # Introduction
-
-Path recommendation aims to generate routes tailored to user preferences, yet traditional routing methods optimize fixed cost metrics and learning-based methods require retraining for each new preference—neither scales to diverse, open-ended requirements. Although large language models (LLMs) enable natural-language-driven planning, they often produce topologically invalid routes due to weak spatial reasoning. We present LLMDrive, a retrieval-augmented generation framework with three key designs. (1) We construct local topological corridors by merging historical trajectories with graph-derived paths, and compress them into decision graphs that preserve road connectivity within LLM context budgets. (2) We convert road edges into natural-language descriptions with semantic attributes and explicit adjacency, bridging the modality gap with LLMs. (3) We design a two-stage pipeline (BM25 lexical filtering followed by dense semantic retrieval) to efficiently identify relevant corridors. Experiments on taxi trajectory datasets from three cities over scenic and fuel-efficient route recommendation tasks show that LLMDrive, without task-specific fine-tuning, is competitive with supervised baselines and outperforms the same LLM without retrieved context by over 30 precision points.
-
-![context_generation](https://github.com/user-attachments/assets/e3c94bdb-c2ad-4eb8-b80a-ac830c29dd34)
-![context_generation](https://github.com/user-attachments/assets/e3c94bdb-c2ad-4eb8-b80a-ac830c29dd34)
-
-Inspired by recent advances in the field of Large Language
-Models (LLMs), we leveraged their natural language understanding capabilities to develop a unified model while being seamlessly adaptable to new scenarios without additional training.
-To accomplish this, we combined the extensive knowledge LLMs acquired during training with further access to external hand-crafted context in
-formation, similar to RAG (Retrieved Augmented Generation) systems, to enhance their ability to generate paths according to user-defined requirements.  -->
-
-<!-- ![pathgpt_framework](https://github.com/user-attachments/assets/9160e97f-12ea-4905-b752-2ca7e0ed6519) -->
+Supported cities: `beijing`, `chengdu`, `harbin`.
 
 # Environment setup
-For reference, all of our experiments were conducted on a server machine running Ubuntu 22.04 LTS with a NVIDIA RTX 4050.
 
-## Local deployment of Qwen3-8b
-We use Qwen3-8b as the base LLM for our experiments which can be locally deployed through frameworks such as Ollama. Below is an example for local deployment using Ollama.
-- First, install Ollama on your local machine
-    * If you are on Linux, run:
-      ```bash
-      curl -fsSL https://ollama.com/install.sh | sh
-      ```
-    * If you are on Windows or macOS, you can download it [here](https://ollama.com/download) and follow the official installation instructions
-- Then download and deploy Qwen3-8b by running:
-    ```bash
-   ollama run qwen3:8b
-    ```
-**N.B.**
-- For optimal performance, we recommend running the model on a GPU
-- Qwen3-8b requires at least 10 GB of VRAM, so make sure you have enough VRAM  if you are planning to run it on a GPU.
-- The ollama service needs to be launched manually on Ubuntu 22.04 LTS. This can be accomplished by running:
-  ```bash
-  sudo systemctl enable ollama
-  sudo systemctl start ollama
-  ```
-## Data - Credits to [NeuroMLR](https://github.com/idea-iitd/NeuroMLR)
-Following instructions listed from [NeuroMLR](https://github.com/idea-iitd/NeuroMLR).
-Download the [preprocessed data](https://drive.google.com/file/d/1bICE26ndR2C29jkfG2qQqVkmpirK25Eu/view?usp=sharing) and unzip the downloaded .zip file in the same directory as the other files.
+For reference, experiments were run on a server with Ubuntu 22.04 LTS and an NVIDIA RTX 5090 (CUDA 13.0). Python **3.12.13** is recommended.
 
-Set the PREFIX_PATH variable in `varibales.py` through the `place_name` variable.
-
-For each city (Beijing, Chengdu, Harbin), there are two types of data:
-
-#### 1. Mapmatched pickled trajectories
-
-Stored as a Python pickled list of tuples, where each tuple is of the form (trip_id, trip, time_info). Here, each trip is a list of edge identifiers.
-
-
-#### 2. OSM map data
-	
-In the map folder, there are the following files-
-
-1. `nodes.shp`: Contains OSM node information (global node id mapped to (latitude, longitude)) 
-2. `edges.shp`: Contains network connectivity information (global edge id mapped to corresponding node ids)
-3. `graph_with_haversine.pkl`: Pickled NetworkX graph corresponding to the OSM data
-
-### JSON files 
-In place extract the json documents located in the json_files/highway_free folder.
-
-### POIs
-Extract the POIs (Points of Interests) from the folder pois.rar.
-   
 ## Install dependencies
-Before installing the dependencies, we recommend first creating a virtual environment. 
-For example, you can use conda (assuming it's already installed on your system) to create and activate a virtual environment called pathgpt by entering the following commands:
-```bash
-conda create -n pathgpt python=3.10
-conda activate pathgpt
-```
-The dependencies can then be installed by running:
-```bash
-python install -r requirements.txt
-```
-The recommended Python version is 3.10. If you are using CUDA, we recommend CUDA 12.4.
 
-N.B: We use the bm25s library to perform lexical search, however this library doesn't have a native tokenizer for Chinese text yet, therefore the default tokenizer method has to be replaced with jieba.cut for Chinese text after installing and importing jieba in the tokenize.py file.
+Create and activate a virtual environment, then install requirements:
+
+```bash
+conda create -n llmdrive python=3.12.13
+conda activate llmdrive
+pip install -r requirements.txt
+```
+
+**N.B.** We use `bm25s` for lexical search. For Chinese text, replace the default tokenizer with `jieba.cut` in `tokenize.py` after installing `jieba`.
+
+## LLM inference (Qwen3-8B)
+
+The reproduction script uses **vLLM** (`inference.py`). Update the model path in `inference.py` if needed:
+
+```python
+llm = LLM(model="/path/to/Qwen3-8B", gpu_memory_utilization=0.95)
+```
+
+Qwen3-8B (FP16) needs roughly **16 GB VRAM** on GPU for the model only. You can also serve the model with **Ollama** for interactive use, but the bundled pipeline expects vLLM outputs with structured JSON (`anchor_segments`).
+
+## Data — credits to [NeuroMLR](https://github.com/idea-iitd/NeuroMLR)
+
+Follow [NeuroMLR](https://github.com/idea-iitd/NeuroMLR) and download the [preprocessed data](https://drive.google.com/file/d/1bICE26ndR2C29jkfG2qQqVkmpirK25Eu/view?usp=sharing). Unzip it so each city lives under `preprocessed_data/{place_name}_data/`.
+
+Map paths are set via `-place_name` (see `variables.py`); default layout:
+
+- `preprocessed_data/{place_name}_data/map/nodes.shp`
+- `preprocessed_data/{place_name}_data/map/edges.shp`
+- `preprocessed_data/{place_name}_data/map/graph_with_haversine.pkl`
+- Pickled trajectories: `preprocessed_train_trips_all.pkl`, `preprocessed_test_trips_all.pkl`, etc.
+
+For **POI-aware** tasks (`poi_aware`, `scenic`), extract POIs into `pois/{place_name}_pois` (from `pois.rar` in the release).
 
 # Reproducibility
-## End to End reproduction
-To reproduce the results listed in the paper, you can run:
-```bash
-bash run_script.sh dataset path-type use-context
-```
-The first argument "dataset" is the dataset from which the  OD (origin-destination) pairs will be extracted to perform the recommendation task. This argument can take on the value of beijing, chengdu or harbin
-The second argument is the type of paths that the user would like to be recommended to. At this point in time, we support around 5 path types: most_used, fastest, shortest, touristic (scenic) and highway_free.
-Finally, the argument "use-context" enables the use of PathGPT.
+
+## Quick start (paper v2 — anchor segments)
 
 ```bash
-python inference.py -use-context -place_name beijing -path_type touristic -top_k 9
+bash run_script.sh beijing
 ```
-The above example recommends the most scenic paths for different OD pairs retrieved from the beijing dataset using PathGPT. Here, top_k represents the number of examples that will be shown to the LLM.
+
+This runs, in order:
+
+1. `data_augmentation.py`
+2. `data_preprocessing.py`
+3. `subgraph_construction.py` (`-top_k_shortest` enabled in `run_script.sh`)
+4. `context_generation.py`
+5. `prompt_generation.py`
+6. `inference.py`
+7. `evaluate_paper_v2.py`
+
+**Defaults in `run_script.sh`:** `retrieval=spatial_hybrid`, `llm_task=anchor_segments`, `top_k=9`, `corridor_graph_form=compressed`.
+
+To change city, pass one argument: `bash run_script.sh chengdu poi_aware`. To change path type or flags, edit `run_script.sh` or run steps manually (below).
+
+## Manual run (single step)
+
+Example matching the v2 pipeline:
+
+```bash
+python prompt_generation.py -use-context -place_name beijing -path_type poi_aware \
+  -retrieval spatial_hybrid -llm_task anchor_segments -top_k 9
+
+python inference.py -use-context -place_name beijing -path_type poi_aware \
+  -retrieval spatial_hybrid -llm_task anchor_segments -top_k 9
+```
+
+`top_k` is the number of retrieved corridor contexts shown to the LLM.
 
 ## Evaluation
-For a simple evaluation on a specific dataset, run
+
+Primary evaluator:
+
 ```bash
-python evaluate.py -use-context -place_name beijing -path_type highway_free -top_k 6
-```
-To get the evaluation results on the three used datasets, run 
-```bash
-python evaluate_all.py
+python evaluate_paper_v2.py -use-context -place_name beijing -path_type poi_aware \
+  -retrieval spatial_hybrid -llm_task anchor_segments -top_k 9
 ```
 
+Report the main system row. Other rows are ablations (retrieved union, anchor-only soft prior, random anchors, task-optimal oracle on the full graph).
 
-  
+Common `-path_type` values: `poi_aware`, `scenic`, `fuel_efficient`, `fastest`, `shortest`, `highway_free`.
 
-
-
+Optional flags: `-top_k_shortest`, `-k_shortest 3`, `-corridor_graph_form uncompressed`.

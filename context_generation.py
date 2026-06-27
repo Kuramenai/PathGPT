@@ -9,8 +9,8 @@ from termcolor import cprint
 from utils import make_dir
 from typing import Dict, Any, Tuple, List, Set
 
-from filter_custom_dataset import clean_street_name
-from generate_custom_dataset import apply_poi_aware_weights, load_graph, poi_catalog_path
+from data_preprocessing import clean_street_name
+from data_augmentation import apply_poi_aware_weights, load_graph, poi_catalog_path
 from subgraph_construction import (
     Segment,
     build_edge_attribute_dicts,
@@ -157,7 +157,7 @@ def generate_embedding_text(
     dest_name = clean_road_name(edge_dicts["edge_id_to_name"].get(dest_edge, "未知终点"))
 
     segments = subgraph.get("segments", {})
-    adjacency = subgraph.get("segment_id_adjacency", {})
+    # adjacency = subgraph.get("segment_id_adjacency", {})
     start_segment_id = subgraph.get("start_segment_id", "未知")
     destination_segment_ids = sorted(
         subgraph.get("destination_segment_ids", []),
@@ -227,9 +227,14 @@ def extract_corridor_features(subgraph: Dict[str, Any]) -> Dict[str, float]:
         road_type_text = " ".join(str(t).lower() for t in segment.get("road_types", []))
         if any(token in road_type_text for token in ("motorway", "trunk", "expressway", "高速", "快速")):
             highway_length += length
-        elif any(token in road_type_text for token in ("primary", "secondary", "tertiary", "主干", "次干", "干道")):
+        elif any(
+            token in road_type_text for token in ("primary", "secondary", "tertiary", "主干", "次干", "干道")
+        ):
             arterial_length += length
-        elif any(token in road_type_text for token in ("residential", "living_street", "service", "unclassified", "住宅", "生活", "支路")):
+        elif any(
+            token in road_type_text
+            for token in ("residential", "living_street", "service", "unclassified", "住宅", "生活", "支路")
+        ):
             local_length += length
 
     segment_count = len(segments)
@@ -289,7 +294,9 @@ def describe_intent_features(features: Dict[str, float], stats: Dict[str, List[f
     medium_speed = 1 - abs(high_speed - 0.5) * 2
 
     scores = {
-        "最快路线": mean_score(low_time, high_speed, max(high_arterial, 1 - low_highway), low_decision_density),
+        "最快路线": mean_score(
+            low_time, high_speed, max(high_arterial, 1 - low_highway), low_decision_density
+        ),
         "最短路线": mean_score(low_length, low_segments, low_decision_density),
         "避开高速路线": mean_score(low_highway, high_local),
         "省油路线": mean_score(low_length, low_decision_density, medium_speed, low_highway),

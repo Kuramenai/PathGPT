@@ -29,7 +29,7 @@ from evaluate_ranked_contexts import (
     task_weight_column,
 )
 from evaluate_single import build_edge_id_to_name, build_edge_id_to_uvk, safe_float
-from generate_custom_dataset import apply_poi_aware_weights, load_graph
+from data_augmentation import apply_poi_aware_weights, load_graph
 from utils import make_dir
 
 

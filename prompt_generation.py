@@ -8,7 +8,6 @@ import jieba
 import bm25s
 import geopandas as gpd
 import variables
-from pathlib import Path
 from typing import Any
 from tqdm import tqdm
 from termcolor import cprint
@@ -266,7 +265,9 @@ def prompts_output_name(top_k: int) -> str:
         f"_{variables.llm_task}" if variables.use_context and variables.llm_task != "route_segments" else ""
     )
     context_suffix = variables.context_name_suffix if variables.use_context else ""
-    return f"{variables.place_name}{context_suffix}_prompts_{variables.retrieval_type}_top_{top_k}{task_suffix}"
+    return (
+        f"{variables.place_name}{context_suffix}_prompts_{variables.retrieval_type}_top_{top_k}{task_suffix}"
+    )
 
 
 def tokenize_chinese(text: str) -> list[str]:
@@ -357,6 +358,11 @@ def generate_query(path_collection: dict) -> tuple[str, dict, tuple[int, int] | 
             f"您是一位{variables.place_name}候选路网排序助手。"
             f"您的任务是根据用户路线需求，选择最值得交给下游图搜索算法的候选路网。"
         )
+    elif variables.use_context and variables.llm_task == "anchor_segments":
+        system_instruction = (
+            f"你是一名 {variables.place_name} 的符号化道路路段选择助手。"
+            f"你的任务是选择一组紧凑的 G 路段锚点（G-segment anchors），用于为后续的全图路径搜索提供软引导。"
+        )
     elif variables.use_context:
         system_instruction = (
             f"您是一位{variables.place_name}符号化路网导航助手。"
@@ -366,12 +372,6 @@ def generate_query(path_collection: dict) -> tuple[str, dict, tuple[int, int] | 
         system_instruction = (
             f"您是一位具备丰富本地地理知识的{variables.place_name}道路导航助手。"
             f"您的任务是生成起点和终点之间最符合现实的驾驶路线。"
-        )
-
-    if variables.use_context and variables.llm_task == "anchor_segments":
-        system_instruction = (
-            f"你是一名 {variables.place_name} 的符号化道路路段选择助手。"
-            f"你的任务是选择一组紧凑的 G 路段锚点（G-segment anchors），用于为后续的全图路径搜索提供软引导。"
         )
 
     llm_query_dict = {"system_instruction": system_instruction, "question": question_text}
@@ -435,7 +435,9 @@ if __name__ == "__main__":
         with open(prompts_filepath + output_name, "wb") as f:
             pickle.dump(prompts, f)
         cprint(f"Prompts saved to {prompts_filepath}{output_name}", "green")
-        cprint(f"\nSuccessfully generated {len(prompts)} no-context prompts ready for Qwen3-8B!", "light_green")
+        cprint(
+            f"\nSuccessfully generated {len(prompts)} no-context prompts ready for Qwen3-8B!", "light_green"
+        )
         exit(0)
 
     # 1. LOAD DATA (Fixed JSON Loading)

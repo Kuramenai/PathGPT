@@ -9,7 +9,7 @@ import networkx as nx
 from collections import defaultdict
 from typing import Any, Dict, List, Optional, Set, Tuple
 from termcolor import cprint
-from filter_custom_dataset import clean_street_name
+from data_preprocessing import clean_street_name
 from utils import make_dir
 
 
